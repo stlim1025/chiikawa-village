@@ -227,9 +227,38 @@ const PETALS = [
   [600, 560], [1450, 700], [330, 820], [760, 500], [170, 830], [1900, 700], [1250, 650], [1000, 760],
 ];
 
+// The notice board's own lettering, drawn with the same round pen as the rest: each
+// glyph is where the pen starts in a box 8 wide and 12 tall, the strokes from there, and
+// how far the next glyph stands.
+const GLYPH = {
+  0: [4, 0, 'a4 6 0 1 1-.1 0'],
+  1: [2, 3, 'l3-3v12'],
+  2: [0, 3, 'q4-6 8 0q0 2-8 9h8'],
+  3: [1, 0, 'h6l-4 5c8-1 7 8-3 7'],
+  4: [6, 12, 'v-12l-6 8h8.5'],
+  5: [7, 0, 'h-5l-1 5c9-2 9 8-1 7'],
+  6: [7, 0, 'c-9 3-9 12-3 12s5-8-3-6'],
+  7: [0, 0, 'h8l-4.5 12'],
+  8: [4, 5, 'c-9-7 9-7 0 0c11 9-11 9 0 0'],
+  9: [1, 12, 'c9-3 9-12 3-12s-5 8 3 6'],
+  '%': [1, 12, 'l6-12m-7 1h2l-1 2zm6 8h2l-1 2z'],
+  ':': [2, 3, 'v.1m0 6v.1', 7],
+  '~': [0, 7, 'q2-3 4 0t4 0'],
+  '/': [1, 12, 'l6-12', 9],
+};
+// A row's mark, in a box 16 square: an hourglass, a calendar page, a speech bubble.
+const MARK = {
+  five: [3, 1, 'h10l-10 14h10zm-2 0h14m-14 14h14'],
+  week: [1, 3, 'h14v12h-14zm0 4h14m-10-6v3m6-3v3'],
+  context: [1, 2, 'h14v9h-7l-4 4v-4h-3z'],
+};
+
 // `clock` is the time on the house clock, { hour, minute, second }, when it is not the
 // hour the sky shows (a part of the day picked by hand).
-export function villageScene({ hour, minute, second = 0, startAt = 0, weather = 'clear', actors = '', clock = null } = {}) {
+// `board` is up to four rows for the notice board on the cherry tree,
+// { key: 'five' | 'week' | 'context', percent (0..100, may be missing), note (digits and : ~ /) };
+// none, and there is no board.
+export function villageScene({ hour, minute, second = 0, startAt = 0, weather = 'clear', actors = '', clock = null, board = null } = {}) {
   const hr = Number(hour);
   const mn = Number(minute);
   const hh = Number.isFinite(hr) ? ((Math.floor(hr) % 24) + 24) % 24 : 12;
@@ -844,6 +873,60 @@ export function villageScene({ hour, minute, second = 0, startAt = 0, weather = 
     D.push(`<g id="cv-bf" stroke="${ol}" stroke-width="1.4">${animT('scale', '1 1;.25 1;1 1', 0.45)}<path d="M0 0C-10-14-18-6-11 1C-16 6-9 13 0 2ZM0 0C10-14 18-6 11 1C16 6 9 13 0 2Z"/></g>`);
     const fly = (x, y, col, dur, off) => `<use href="#cv-bf" x="${x}" y="${y}" fill="${col}">${animT('translate', '0 0;16 -18;34 -4;14 10;0 0', dur, off)}</use>`;
     o.push(fly(1474, 760, c('#ffe59a'), 9, 0) + fly(330, 742, c('#cdbff0'), 11, 3) + fly(1700, 982, c('#fff8f2'), 10, 5));
+  }
+
+  // ================= notice board on the cherry tree =================
+  // A wooden board hung from a nail in the trunk, one row for each figure: its mark, a
+  // gauge of ten cells, the percent, and under them a small note. Drawn last of the back
+  // layer, so nothing but the cast passes in front of it.
+  if (Array.isArray(board) && board.length) {
+    const rows = board.slice(0, 4);
+    // Pale wood with dark writing in good light; when the light drops, dark wood with
+    // pale writing, so the two never meet in the middle.
+    const pale = c('#f6e6c8');
+    const [r0, g0, b0] = hx(pale);
+    const dim = r0 * 0.3 + g0 * 0.59 + b0 * 0.11 < 135;
+    const wood = dim ? mix(c('#9a7762'), '#ffdf8e', 0.1 * L) : pale;
+    const paint = (hex) => (dim ? mix(c(hex), hex, 0.7) : c(hex));
+    const pitch = rows.length > 3 ? 36 : 42;
+    const h = (rows.length - 1) * pitch + 48;
+    // Glyphs written from x, their tops at y; `end` for a string that ends at x.
+    const write = (str, x, y, end) => {
+      const gs = [...String(str ?? '')].map((ch) => GLYPH[ch]).filter(Boolean);
+      if (end) x -= gs.reduce((w, g) => w + (g[3] || 11), -3);
+      let d = '';
+      for (const g of gs) {
+        d += `M${f(x + g[0])} ${f(y + g[1])}${g[2]}`;
+        x += g[3] || 11;
+      }
+      return d;
+    };
+    let track = '';
+    let cells = '';
+    let fills = '';
+    let marks = '';
+    let nums = '';
+    let notes = '';
+    rows.forEach((row, i) => {
+      const y = 21 + i * pitch;
+      const raw = row && row.percent;
+      const pc = raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)) ? null : clamp(Number(raw), 0, 100);
+      const n = pc ? Math.max(1, whole(pc / 10)) : 0;
+      track += `M-60 ${y + 8}h90`;
+      cells += `M-64 ${y + 8}h98`;
+      if (n) fills += `<path stroke="${paint(pc > 80 ? '#f58d8d' : pc >= 50 ? '#ffc46b' : '#8fd6a6')}" d="M-64 ${y + 8}h${n * 10 - 2}"/>`;
+      const m = row && Object.hasOwn(MARK, row.key) && MARK[row.key];
+      if (m) marks += `M${m[0] - 87} ${y + m[1]}${m[2]}`;
+      if (pc !== null) nums += write(whole(pc) + '%', 86, y + 2, true);
+      if (row && row.note) notes += write(row.note, -86, (y + 21) / 0.75);
+    });
+    o.push(
+      `<g transform="translate(262 598)" ${OUT}><g>${animT('rotate', '-1.2;1.2;-1.2', 7, 1)}<path d="M-62 14L0 0L62 14" fill="none"/>` +
+        `<rect x="-98" y="17" width="196" height="${h}" rx="10" fill="${mix(wood, ol, 0.45)}"/><rect x="-98" y="12" width="196" height="${h}" rx="10" fill="${wood}"/><circle r="4" fill="${c('#8a6f66')}"/>` +
+        `<path stroke-width="2" fill="${paint('#fffaf0')}" d="${marks}"/><path stroke-width="13" d="${track}"/>` +
+        `<g stroke-linecap="butt" stroke-width="9" stroke-dasharray="8 2" stroke="${mix(wood, '#ffffff', dim ? 0.28 : 0.45)}"><path d="${cells}"/>${fills}</g>` +
+        `<g fill="none" stroke="${dim ? '#fff3d6' : c('#5b4038')}" stroke-width="2.4"><path d="${nums}"/><path transform="scale(.75)" d="${notes}"/></g></g></g>`,
+    );
   }
 
   // ================= characters go here =================

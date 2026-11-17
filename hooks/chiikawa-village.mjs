@@ -37,12 +37,13 @@ let isCast = true; // the cast drawn into the scene (only those `onStage`)
 // The whole play in one picture when it fits; else the cast is drawn for the next
 // AHEAD seconds only, and a new picture comes a few seconds before that runs out
 // (a new line said makes one sooner anyway).
-const AHEADS = [62, 50, 40, 30];
+const AHEADS = [62, 50, 40, 30, 20];
 const SPARE = 4;
 const LIMIT = 131072;
 // How often the sky's light follows the clock, in minutes.
 const SKY_MINUTES = 15;
 let redrawAt = 0;
+let limitsSeen = ""; // the rate-limit windows as last read, shown by `/village`
 
 // Who is on stage (`/village who`), by the play's names.
 const CAST_NAMES = { 하치와레: "hachiware", 치이카와: "chiikawa", 우사기: "usagi", 모몽가: "momonga", 쿠리만쥬: "kurimanju", 랏코: "rakko" };
@@ -70,6 +71,37 @@ async function readWeather($) {
     }
   } catch {
     // The sky stays.
+  }
+}
+
+// ── the board on the cherry tree ─────────────────────────────────────────────
+// When a window starts over: the hour and minute for the five-hour one, the month
+// and day for the week. The board draws its own figures, `0-9 : ~ /` only.
+function resetNote(at, isWeek) {
+  const day = new Date(at ?? "");
+  if (Number.isNaN(day.getTime())) {
+    return undefined;
+  }
+  return isWeek
+    ? `~${day.getMonth() + 1}/${day.getDate()}`
+    : `~${day.getHours()}:${String(day.getMinutes()).padStart(2, "0")}`;
+}
+
+// The board's rows: the five-hour and weekly windows, then the context window. A
+// window with no reading yet keeps its row, empty.
+async function boardRows($) {
+  try {
+    const { context, rateLimits } = await $.session.usage();
+    limitsSeen = rateLimits.map((limit) => `${limit.kind} ${limit.percentUsed}%`).join(" · ");
+    const five = rateLimits.find((limit) => limit.kind === "five_hour");
+    const week = rateLimits.find((limit) => limit.kind === "seven_day");
+    return [
+      { key: "five", percent: five?.percentUsed, note: resetNote(five?.resetsAt, false) },
+      { key: "week", percent: week?.percentUsed, note: resetNote(week?.resetsAt, true) },
+      { key: "context", percent: context.percent },
+    ];
+  } catch {
+    return null;
   }
 }
 
@@ -424,8 +456,10 @@ export function register(on) {
   on("command.run", { command: "village" }, async ($, e) => {
     const [word = "", ...rest] = String(e.args ?? "").trim().split(/\s+/);
     const value = rest.join(" ");
+    await boardRows($); // reads the rate-limit windows afresh for the state line
     const state = () =>
-      `\n지금: ${part}, 날씨 ${weatherShown ?? `자동(${weather})`}, 유리 ${glass.opacity}/${glass.blur}/${glass.tint}`;
+      `\n지금: ${part}, 날씨 ${weatherShown ?? `자동(${weather})`}, 유리 ${glass.opacity}/${glass.blur}/${glass.tint}` +
+      `\n한도: ${limitsSeen || "아직 읽은 값 없음"}`;
     const redraw = (text) => {
       $.ui.invalidate("ui.render");
       return { text: text + state() };
@@ -530,7 +564,12 @@ export function register(on) {
     const quarter = hourShown === undefined ? Math.floor(day.getMinutes() / SKY_MINUTES) : 0;
     // What they say rides over their heads, so a new line makes a new picture.
     const words = talk.length ? talk : said ? [{ who: "hachiware", text: said }] : [];
-    const key = `${hour}:${quarter}:${sky}:${isCast}:${onStage.join(",")}:${words.map((w) => `${w.who}:${w.text}`).join("|")}`;
+    // The board's figures go into whatever new picture comes, so they make no blink
+    // of their own: with the cast on, one comes at least every minute. Without it,
+    // a figure moving a step of 5% makes one.
+    const board = await boardRows($);
+    const steps = isCast ? "" : (board ?? []).map((row) => Math.floor((row.percent ?? -5) / 5)).join(",");
+    const key = `${hour}:${quarter}:${sky}:${isCast}:${onStage.join(",")}:${steps}:${words.map((w) => `${w.who}:${w.text}`).join("|")}`;
     const isDue = redrawAt && now >= redrawAt;
     if (lately.key !== key || isDue) {
       const startAt = Math.max(0, now - startedAt) / 1000;
@@ -543,6 +582,7 @@ export function register(on) {
           clock: { hour: day.getHours(), minute: day.getMinutes(), second: day.getSeconds() + day.getMilliseconds() / 1000 },
           startAt,
           weather: sky,
+          board,
           actors: ahead === null ? "" : play(startAt, words, hour + minute / 60, ahead, onStage),
         }).replace("<svg ", `<svg preserveAspectRatio="xMidYMax slice" `);
       // The whole play (0) if it fits, else a shorter look ahead; the scene alone at worst.
