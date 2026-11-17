@@ -1,0 +1,6 @@
+{
+  "name": "chiikawa-village",
+  "owner": { "name": "stlim1025" },
+  "description": "The Chiikawa village behind the conversation in the Claude Code desktop app.",
+  "plugins": [{ "name": "chiikawa-village", "source": "./" }]
+}
