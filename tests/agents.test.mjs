@@ -93,6 +93,12 @@ test("tools are noted on running jobs only, the last 24 kept", () => {
   assert.deepEqual(noteTool(jobs, "nobody", "Bash", "ls"), jobs);
 });
 
+test("a job already on the board is not added again", () => {
+  // Seeded from the engine's list at session start, then spawned under the same id.
+  const jobs = addJob(addJob([], job("a", { startedAt: null }), WORK_ORDER), job("a"), WORK_ORDER);
+  assert.equal(jobs.length, 1);
+});
+
 test("inputs stay as they were", () => {
   const jobs = Object.freeze([]);
   const one = addJob(jobs, job("a"), WORK_ORDER);

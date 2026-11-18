@@ -297,6 +297,23 @@ export const BUSTS = {
   momonga: ['idle', '-52 -126 108 108'],
   rakko: ['train0', '-49 -128 108 108'],
 };
+// The board's name plank on its own, for the job pane's head: pale wood, the round pen.
+export function plankSvg() {
+  const w = letterWidth(BOARD_NAME) * 1.1;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${f(w + 24)} 30" stroke-linejoin="round" stroke-linecap="round">` +
+    `<rect x="1.5" y="4" width="${f(w + 21)}" height="24" rx="6" fill="#d9c4a2" stroke="#6b5a55" stroke-width="2"/><rect x="1.5" y="1.5" width="${f(w + 21)}" height="24" rx="6" fill="#f6e6c8" stroke="#6b5a55" stroke-width="2"/>` +
+    `<path transform="translate(12 6.5)scale(1.1)" d="${letter(BOARD_NAME, 0, 0)}" fill="none" stroke="#5b4038" stroke-width="1.91"/></svg>`
+  );
+}
+// A finished job's stamp on its own: the red flower circle, or the grey cross.
+export function stampSvg(mark) {
+  const draw =
+    mark === 'fail'
+      ? `<path d="M-7-7L7 7M7-7L-7 7" fill="none" stroke="#8a8580" stroke-width="2.4"/>`
+      : `<g fill="none" stroke="${STAMP}" stroke-width="2"><path d="M0 0a1.6 1.6 0 0 1 3.2 0a3.2 3.2 0 0 1-6.4 0a4.8 4.8 0 0 1 9.6 0a6 6 0 0 1-11.2 2"/><circle r="9.2"/></g>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12 -12 24 24" stroke-linecap="round">${draw}</svg>`;
+}
 // The cast frames the notes' faces use, as `${who}-${pose}`, each once: the pinned notes
 // only (the first four), since one lying on the grass shows its stamp and no face.
 export function bustIds(notes) {

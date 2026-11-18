@@ -30,6 +30,10 @@ export function kindOf(type) {
 const isOut = (job, now) => job.worker !== null && (job.endedAt === null || now < job.endedAt + RETURN_MS);
 
 export function addJob(jobs, { id, type, task, startedAt, status, now }, onStage) {
+  // One note per agent: seeded at session start and spawned again under the same id.
+  if (jobs.some((job) => job.id === id)) {
+    return jobs;
+  }
   const out = jobs.filter((job) => isOut(job, now));
   const busy = new Set(out.map((job) => job.worker));
   const taken = new Set(out.map((job) => job.slot));

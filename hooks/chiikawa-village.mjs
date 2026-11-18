@@ -7,9 +7,10 @@
 // only when what it shows changes; and a big area fading or lighting up at once (an
 // SVG filter, a whole-view flash) stops the picture from moving in the app.
 
-import { villageScene } from "./scene.mjs";
+import { villageScene, bustIds, BUSTS, plankSvg, stampSvg } from "./scene.mjs";
 import { villageButton, VARIANTS } from "./button.mjs";
-import { play } from "./play.mjs";
+import { play, frameDefs, castDefs } from "./play.mjs";
+import { addJob, noteTool, noteAnswered, settle, boardOf, boardKey, ENDED, RETURN_MS, GONE_MS } from "./agents.mjs";
 
 const NAME = "chiikawa-village";
 const ID = "village";
@@ -49,6 +50,118 @@ let limitsSeen = ""; // the rate-limit windows as last read, shown by `/village`
 const CAST_NAMES = { 하치와레: "hachiware", 치이카와: "chiikawa", 우사기: "usagi", 모몽가: "momonga", 쿠리만쥬: "kurimanju", 랏코: "rakko" };
 const EVERYONE = Object.values(CAST_NAMES);
 let onStage = EVERYONE;
+
+// ── the job board: the session's subagents as jobs (folded in from agent-watch) ──
+// Each job pins a note on the board on the lawn and sends a friend to the weeding
+// field (agents.mjs keeps the books). The pane with the details opens only from the
+// label under the prompt, so the conversation is never pushed aside.
+const PANE = "village-jobs";
+const PANE_TITLE = "일거리";
+// A pane open redraws on a tool or a status change, never more often than this.
+const PANE_MIN_MS = 2000;
+const NAMES = Object.fromEntries(Object.entries(CAST_NAMES).map(([name, who]) => [who, name]));
+// A status without a color draws dim (agent-watch's).
+const STATUS = {
+  pending: { mark: "○", word: "시작 중" },
+  running: { mark: "●", word: "실행 중", color: "green" },
+  waiting: { mark: "◐", word: "기다리는 중", color: "yellow" },
+  idle: { mark: "◌", word: "유휴" },
+  completed: { mark: "✓", word: "완료", color: "green" },
+  failed: { mark: "✗", word: "실패", color: "red" },
+  killed: { mark: "■", word: "중단" },
+};
+// Tool kinds for the strip of squares on a note in the pane (agent-watch's).
+const KINDS = [
+  { color: "blue", tools: ["Read", "Glob", "Grep", "LS", "NotebookRead", "LSP"] },
+  { color: "yellow", tools: ["Edit", "Write", "MultiEdit", "NotebookEdit"] },
+  { color: "magenta", tools: ["Bash", "PowerShell", "Monitor"] },
+  { color: "cyan", tools: ["WebFetch", "WebSearch"] },
+  { color: "green", tools: ["Agent", "Task", "SendMessage"] },
+];
+const INK = "#5b4038";
+let jobs = [];
+let isPaneOpen = false;
+let paneDrawnAt = 0;
+let isPaneStale = false;
+let jobsSeen = ""; // what the board and label showed when last asked to redraw
+
+// The tool call's most telling argument: a command, a file, a pattern.
+function describeTool(e) {
+  const name = (path) => path.split(/[\\/]/).pop() || path;
+  return typeof e.command === "string" ? e.command.split("\n")[0]
+    : typeof e.file_path === "string" ? name(e.file_path)
+    : typeof e.notebook_path === "string" ? name(e.notebook_path)
+    : typeof e.pattern === "string" ? `"${e.pattern}"`
+    : typeof e.query === "string" ? `"${e.query}"`
+    : typeof e.url === "string" ? e.url
+    : typeof e.description === "string" ? e.description
+    : "";
+}
+function elapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}시간 ${m}분`;
+  if (m > 0) return `${m}분 ${s}초`;
+  return `${s}초`;
+}
+const ranFor = (job, now) => (job.startedAt === null ? null : (job.endedAt ?? now) - job.startedAt);
+const working = () => jobs.filter((job) => job.endedAt === null).length;
+// What a redraw of the board or the label hangs on: who, which mark, and the count;
+// with the cast off (no picture of its own every minute), the minutes and fallen notes too.
+function jobsView(now) {
+  const board = boardOf(jobs, now);
+  const extra = isCast ? "" : board.notes.map((n) => `${n.minutes}${n.isFallen ? "f" : ""}`).join(",");
+  return `${board.notes.filter((n) => !n.isFallen).map((n) => `${n.who}.${n.mark}`).join(",")}|${board.extra}|${working()}|${isPaneOpen}|${extra}`;
+}
+
+async function seedJobs($) {
+  jobs = [];
+  try {
+    const now = await $.clock.now();
+    for (const info of await $.agent.list()) {
+      if (!ENDED.has(info.status)) {
+        jobs = addJob(jobs, { id: info.id, type: info.type, task: info.description, startedAt: null, status: info.status, now }, onStage);
+      }
+    }
+  } catch {
+    // No reading; the next spawn starts the board.
+  }
+}
+
+// Every second while there are jobs: the engine's list read, the ended ones toasted, and
+// a redraw asked for only when the board or the label would show something else.
+async function trackJobs($, now) {
+  if (!jobs.length) {
+    return;
+  }
+  let list;
+  try {
+    list = await $.agent.list();
+  } catch {
+    return;
+  }
+  const result = settle(jobs, list, now);
+  jobs = result.jobs;
+  for (const job of result.ended) {
+    const s = STATUS[job.status] ?? STATUS.completed;
+    const ms = ranFor(job, now);
+    $.ui.toast(`${s.mark} ${s.word} · ${job.type} '${job.task}' · ${ms === null ? "시간 모름" : elapsed(ms)}`, { timeoutMs: 6000 });
+  }
+  const view = jobsView(now);
+  // An open pane shows minutes run: a new minute makes it stale.
+  if (isPaneOpen && Math.floor(now / 60000) !== Math.floor(paneDrawnAt / 60000)) {
+    isPaneStale = true;
+  }
+  const paneDue = isPaneOpen && isPaneStale && now - paneDrawnAt >= PANE_MIN_MS;
+  if (view !== jobsSeen || paneDue) {
+    jobsSeen = view;
+    isPaneStale = false;
+    paneDrawnAt = now;
+    $.ui.invalidate("ui.render");
+  }
+}
 
 function choose(name) {
   part = name;
@@ -389,12 +502,43 @@ export function register(on) {
       argumentHint: "낮 | 밤 | 자동 | weather storm | say 안녕 | off",
     });
     await readWeather($);
+    await seedJobs($);
     if (isOn) {
       await show($);
     }
     ticker?.cancel();
     ticker = $.clock.every(TICK, () => void tick($));
     return result;
+  });
+
+  // A new agent pins a note and sends a friend to the field; no pane opens.
+  on("agent.spawn", async ($, e, next) => {
+    const result = await next(e);
+    if (result?.agentId) {
+      const now = await $.clock.now();
+      jobs = addJob(jobs, { id: result.agentId, type: e.subagentType, task: e.description, startedAt: now, status: "pending", now }, onStage);
+      jobsSeen = jobsView(now);
+      $.ui.invalidate("ui.render");
+    }
+    return result;
+  });
+
+  // Each tool an agent's loop calls, for the pane; it redraws only while open.
+  on("tool.call", async ($, e, next) => {
+    if (e.agentId && jobs.some((job) => job.id === e.agentId && job.endedAt === null)) {
+      jobs = noteTool(jobs, e.agentId, e.tool, describeTool(e));
+      if (isPaneOpen) {
+        const now = await $.clock.now();
+        if (now - paneDrawnAt >= PANE_MIN_MS) {
+          paneDrawnAt = now;
+          isPaneStale = false;
+          $.ui.invalidate("ui.render");
+        } else {
+          isPaneStale = true;
+        }
+      }
+    }
+    return next(e);
   });
 
   on("turn.start", async ($, e, next) => {
@@ -436,7 +580,10 @@ export function register(on) {
 
   on("turn.complete", async ($, e, next) => {
     const result = await next(e);
-    if (!e.agentId) {
+    if (e.agentId) {
+      // An agent the engine's list doesn't name (a workflow's) ends once its loop answers.
+      jobs = noteAnswered(jobs, e.agentId);
+    } else {
       isWorking = false;
       turnCount += 1;
       speakTimer?.cancel();
@@ -524,6 +671,18 @@ export function register(on) {
         isCast = true;
         return redraw(`무대에: ${onStage.join(", ")}`);
       }
+      case "probe": {
+        // TEMPORARY (plan Task 1): the same picture sent again every second, to see
+        // whether a redraw of our own rewinds the backdrop. Removed after the check.
+        let left = 30;
+        const probe = $.clock.every(1000, () => {
+          $.ui.invalidate("ui.render");
+          if (--left <= 0) {
+            probe.cancel();
+          }
+        });
+        return { text: "30초 동안 1초마다 다시 그립니다." };
+      }
       default:
         return { text: HELP + state() };
     }
@@ -531,20 +690,111 @@ export function register(on) {
 
   // A button after the engine's mode label (and any other mod's there): each press
   // steps the village to the next part of the day, `자동` following the clock.
+  // After it, while agents work, the job label: it opens and closes the job pane.
   on("ui.render", { component: "SessionMode" }, async ($, e, next) => {
     const theirs = await next(e);
-    if (!isOn) {
+    const count = working();
+    if (!isOn && !count) {
       return theirs;
     }
     const { Box, Text, Button } = $.ui.resolve(e);
-    const onPress = () => {
-      const at = CYCLE.indexOf(part);
-      choose(CYCLE[(at + 1) % CYCLE.length]);
-      $.ui.invalidate("ui.render");
+    const children = theirs ? [theirs] : [];
+    if (isOn) {
+      const onPress = () => {
+        const at = CYCLE.indexOf(part);
+        choose(CYCLE[(at + 1) % CYCLE.length]);
+        $.ui.invalidate("ui.render");
+      };
+      const hour = hourShown ?? new Date(await $.clock.now()).getHours();
+      children.push(villageButton({ Box, Text, Button, part, hour, onPress, variant: look }));
+    }
+    if (count) {
+      const onPress = async () => {
+        if (isPaneOpen) {
+          isPaneOpen = false;
+          try {
+            await $.ui.close({ id: PANE });
+          } catch {
+            // A hook kept it open.
+          }
+        } else {
+          try {
+            isPaneOpen = (await $.ui.open({ id: PANE, title: PANE_TITLE })).isPlaced;
+            paneDrawnAt = await $.clock.now();
+          } catch {
+            // A ui.open hook refused the pane.
+          }
+        }
+        $.ui.invalidate("ui.render");
+      };
+      children.push(Button({ key: "open-village-jobs", label: `일거리 ${count} ▸ ${isPaneOpen ? "접기" : "펼치기"}`, plain: true, onPress }));
+    }
+    return Box({ flexDirection: "row", columnGap: 1, children });
+  });
+
+  on("ui.close", { id: PANE }, async ($, e, next) => {
+    const result = await next(e);
+    isPaneOpen = false;
+    $.ui.invalidate("ui.render");
+    return result;
+  });
+
+  // The job pane: a note for each job, as on the board, with what the board can't show.
+  on("ui.render", { component: "Pane", requestId: PANE }, async ($, e) => {
+    const { Box, Text, Svg } = $.ui.resolve(e);
+    const now = await $.clock.now();
+    const shown = jobs.filter((job) => job.endedAt === null || now < job.endedAt + GONE_MS);
+    const head = Svg
+      ? Svg({ source: plankSvg(), alt: "일거리 게시판", height: 30 })
+      : Text({ bold: true, color: INK, children: "일거리 게시판" });
+    if (!shown.length) {
+      return Box({ flexDirection: "column", rowGap: 1, children: [head, Text({ dimColor: true, children: "지금 일거리가 없습니다." })] });
+    }
+    const card = (job) => {
+      const s = STATUS[job.status] ?? STATUS.running;
+      const ms = ranFor(job, now);
+      const minutes = ms === null ? "시간 모름" : ms < 60000 ? "방금" : `${Math.floor(ms / 60000)}분째`;
+      const who = job.worker ? `${NAMES[job.worker]}가 맡았어요` : "맡은 친구 없음";
+      const bust = job.worker && BUSTS[job.worker];
+      const face = Svg && bust
+        ? [Svg({ source: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bust[1]}">${castDefs(new Set([`${job.worker}-${bust[0]}`]))}<use href="#cv-f-${job.worker}-${bust[0]}"/></svg>`, alt: NAMES[job.worker], width: 24, height: 24 })]
+        : [];
+      const stamp = Svg && job.endedAt !== null ? [Svg({ source: stampSvg(job.status === "completed" ? "done" : "fail"), alt: s.word, width: 18, height: 18 })] : [];
+      const lines = [
+        Box({
+          flexDirection: "row",
+          columnGap: 1,
+          children: [
+            ...face,
+            Text({ bold: true, color: INK, children: who }),
+            Text({ color: INK, dimColor: true, children: job.type }),
+            Text({ ...(s.color ? { color: s.color } : { dimColor: true }), children: `${s.mark} ${s.word}` }),
+            Text({ color: INK, children: minutes }),
+            ...stamp,
+          ],
+        }),
+        Text({ color: INK, wrap: "truncate-end", children: job.task }),
+        job.tool
+          ? Text({ color: INK, dimColor: true, wrap: "truncate-end", children: `└ ${job.tool}${job.detail ? ` ${job.detail}` : ""}` })
+          : Text({ color: INK, dimColor: true, italic: true, children: "└ 생각 중…" }),
+      ];
+      if (job.toolCount > 0) {
+        lines.push(
+          Box({
+            flexDirection: "row",
+            children: [
+              Text({ color: INK, dimColor: true, children: `도구 ${job.toolCount}회  ` }),
+              ...job.history.map((tool) => {
+                const kind = KINDS.find((k) => k.tools.includes(tool));
+                return Text(kind ? { color: kind.color, children: "■" } : { dimColor: true, children: "■" });
+              }),
+            ],
+          }),
+        );
+      }
+      return Box({ flexDirection: "column", backgroundColor: "#fff5df", borderStyle: "round", borderColor: "#b78b6a", paddingX: 1, children: lines });
     };
-    const hour = hourShown ?? new Date(await $.clock.now()).getHours();
-    const button = villageButton({ Box, Text, Button, part, hour, onPress, variant: look });
-    return Box({ flexDirection: "row", columnGap: 1, children: [...(theirs ? [theirs] : []), button] });
+    return Box({ flexDirection: "column", rowGap: 1, children: [head, ...shown.map(card)] });
   });
 
   on("ui.render", { component: "Backdrop" }, async ($, e, next) => {
@@ -569,10 +819,19 @@ export function register(on) {
     // a figure moving a step of 5% makes one.
     const board = await boardRows($);
     const steps = isCast ? "" : (board ?? []).map((row) => Math.floor((row.percent ?? -5) / 5)).join(",");
-    const key = `${hour}:${quarter}:${sky}:${isCast}:${onStage.join(",")}:${steps}:${words.map((w) => `${w.who}:${w.text}`).join("|")}`;
+    // The job board: a start, an end, a wait or a note falling makes a new picture; the
+    // minutes on the notes ride along with the next one (with the cast off, they make one).
+    const jobBoard = boardOf(jobs, now);
+    const jobKey = boardKey(jobBoard) + (isCast ? "" : `:${jobBoard.notes.map((n) => n.minutes).join(",")}`);
+    const key = `${hour}:${quarter}:${sky}:${isCast}:${onStage.join(",")}:${steps}:${words.map((w) => `${w.who}:${w.text}`).join("|")}:${jobKey}`;
     const isDue = redrawAt && now >= redrawAt;
     if (lately.key !== key || isDue) {
       const startAt = Math.max(0, now - startedAt) / 1000;
+      // The workers' times on the play's clock: seconds since the village opened.
+      const onClock = (ms) => (Number.isFinite(ms) && ms !== null ? (ms - startedAt) / 1000 : -Infinity);
+      const workers = jobBoard.workers.map((w) => ({ ...w, startedAt: onClock(w.startedAt), since: onClock(w.since) }));
+      const faces = bustIds(jobBoard.notes);
+      const shownHour = hour + minute / 60;
       const draw = (ahead) =>
         villageScene({
           hour,
@@ -583,7 +842,9 @@ export function register(on) {
           startAt,
           weather: sky,
           board,
-          actors: ahead === null ? "" : play(startAt, words, hour + minute / 60, ahead, onStage),
+          jobs: { notes: jobBoard.notes, extra: jobBoard.extra, faces: true },
+          // With no cast drawn, the notes' faces still need their frames.
+          actors: ahead === null ? frameDefs(faces, shownHour) : play(startAt, words, shownHour, ahead, onStage, { workers, also: faces }),
         }).replace("<svg ", `<svg preserveAspectRatio="xMidYMax slice" `);
       // The whole play (0) if it fits, else a shorter look ahead; the scene alone at worst.
       let source = "";
@@ -596,6 +857,13 @@ export function register(on) {
       }
       lately = { key, at: now, source };
       redrawAt = ahead ? now + (ahead - SPARE) * 1000 : 0;
+      // A friend whose job ended meets the loop again RETURN_MS on: a picture then.
+      for (const w of jobBoard.workers) {
+        const home = (w.state === "done" || w.state === "fail") && w.since + RETURN_MS;
+        if (isCast && home && home > now && (!redrawAt || home < redrawAt)) {
+          redrawAt = home;
+        }
+      }
     }
     return Svg({ source: lately.source, alt: "치이카와 마을" });
   });
@@ -604,6 +872,7 @@ export function register(on) {
 async function tick($) {
   try {
     const now = await $.clock.now();
+    await trackJobs($, now);
     const day = new Date(now);
     const key = `${day.getHours()}:${Math.floor(day.getMinutes() / SKY_MINUTES)}`;
     const isNewQuarter = key !== minuteKey && minuteKey !== "" && hourShown === undefined;
