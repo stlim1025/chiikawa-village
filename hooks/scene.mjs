@@ -1075,9 +1075,11 @@ export function villageScene({ hour, minute, second = 0, startAt = 0, weather = 
     const fallen = (jobs.notes || []).filter((n) => n.isFallen).slice(-2);
     const turns = [-3, 2, -2, 3];
     let slots = '';
+    // An empty pin, defined once: the board shows four of them on a quiet day.
+    D.push(`<circle id="cv-pn" r="3.2" fill="${c('#cfc1b0')}" stroke="${ol}" stroke-width="1.4"/>`);
     for (let i = 0; i < 4; i++) {
       const x = (i - 1.5) * step;
-      slots += pinned[i] ? note(pinned[i], x, rail + 4, turns[i], PINS[i]) : `<circle cx="${f(x)}" cy="${rail + 8}" r="3.2" fill="${c('#cfc1b0')}" stroke-width="1.4"/>`;
+      slots += pinned[i] ? note(pinned[i], x, rail + 4, turns[i], PINS[i]) : `<use href="#cv-pn" x="${f(x)}" y="${rail + 8}"/>`;
     }
     // The finished notes that fell, lying on the grass by the right leg.
     const lying = fallen
@@ -1100,22 +1102,27 @@ export function villageScene({ hour, minute, second = 0, startAt = 0, weather = 
         `</g>`,
     );
     // The field: an oval of thicker grass, a few bare patches, two rows of tall blades.
+    // The blades are three sizes of the lawn's tuft, defined once and placed by x and y,
+    // as the picture is always near its size limit.
+    D.push(`<use id="cv-gt" href="#cv-g" transform="scale(.7 .98)"/><use id="cv-gu" href="#cv-g" transform="scale(-.62 .9)"/><use id="cv-gv" href="#cv-g" transform="scale(.5 .7)"/>`);
     const r = rng(11);
     const [x0, x1, y0, y1] = [300, 536, 916, 976];
     const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-    const tall = (x, y, k) => `<use href="#cv-g" transform="translate(${whole(x)} ${whole(y)})scale(${f2(k * (r() < 0.5 ? -1 : 1))} ${f2(k * 1.4)})"/>`;
-    const row = (n, from, to, y, k) => Array.from({ length: n }, (_, i) => tall(from + ((to - from) * i) / (n - 1) + r() * 8 - 4, y + r() * 5, k + r() * 0.15)).join('');
+    const row = (n, from, to, y, kinds) =>
+      Array.from({ length: n }, (_, i) => `<use href="#cv-${kinds[i % kinds.length]}" x="${whole(from + ((to - from) * i) / (n - 1) + r() * 8 - 4)}" y="${whole(y + r() * 5)}"/>`).join('');
     const blades = `stroke="${ol}" stroke-width="1.9"`;
     const soil = [[-52, 12], [18, 16], [78, 8]].map(([dx, dy]) => `<ellipse cx="${cx + dx}" cy="${cy + dy}" rx="13" ry="4.5"/>`).join('');
-    // A heap of weeds already pulled, roots out, at the field's left end.
-    const heap =
-      `<g transform="translate(322 968)" stroke="${ol}" stroke-width="2"><use href="#cv-g" transform="translate(-4 0)rotate(72)scale(.9 1.2)"/><use href="#cv-g" transform="translate(4 -4)rotate(96)scale(.85 1.25)"/>` +
-      `<use href="#cv-g" transform="translate(0 -8)rotate(-80)scale(.85 1.1)"/><path d="M-6-1q-5 1-8-2m8 0q-4 4-9 4M2-10q5 0 8-3m-7 4q4 3 9 2" fill="none" stroke="${c('#b98a6a')}" stroke-width="1.8"/></g>`;
+    // A heap of weeds already pulled, roots out, at the field's left end: there once
+    // someone has worked (a note on the board or on the grass), not on a quiet day.
+    const heap = (jobs.notes || []).length
+      ? `<g transform="translate(322 968)" stroke="${ol}" stroke-width="2"><use href="#cv-g" transform="translate(-4 0)rotate(72)scale(.9 1.2)"/><use href="#cv-g" transform="translate(4 -4)rotate(96)scale(.85 1.25)"/>` +
+        `<use href="#cv-g" transform="translate(0 -8)rotate(-80)scale(.85 1.1)"/><path d="M-6-1q-5 1-8-2m8 0q-4 4-9 4M2-10q5 0 8-3m-7 4q4 3 9 2" fill="none" stroke="${c('#b98a6a')}" stroke-width="1.8"/></g>`
+      : '';
     o.push(
       `<ellipse cx="${cx}" cy="${cy}" rx="${(x1 - x0) / 2}" ry="${(y1 - y0) / 2}" fill="${c('#8fca8f')}"/><g fill="${c('#c9a888')}" opacity=".75">${soil}</g>` +
-        `<g ${blades}>${row(9, x0 + 22, x1 - 22, y0 + 20, 0.6)}${row(7, x0 + 34, x1 - 34, cy + 8, 0.7)}</g>${heap}`,
+        `<g ${blades}>${row(6, x0 + 24, x1 - 24, y0 + 20, ['gt', 'gu'])}${row(5, x0 + 40, x1 - 40, cy + 8, ['gu', 'gt'])}</g>${heap}`,
     );
-    fieldFront = `<g ${blades}>${row(4, x0 + 50, x1 - 46, y1 - 3, 0.5)}</g>`;
+    fieldFront = `<g ${blades}>${row(3, x0 + 60, x1 - 56, y1 - 3, ['gv'])}</g>`;
   }
 
   // ================= characters go here =================

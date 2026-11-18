@@ -472,6 +472,24 @@ function bubbleLine(text) {
   return SPOKEN.test(fit) ? fit : "";
 }
 
+// The picture to send: the first that fits the app's limit, trying the whole play then
+// shorter look-aheads (never under the shortest of AHEADS, as a shorter one would blink
+// more often) before making it simpler, level by level: 1 the workers tug with one frame,
+// 2 they stand, 3 the notes go faceless. The scene alone if nothing else fits.
+// `draw(ahead, level)` makes a picture: ahead null is the scene without the cast.
+export function pickPicture(draw, isCast) {
+  const tries = isCast
+    ? [0, 1, 2, 3].flatMap((level) => [0, ...AHEADS].map((ahead) => [ahead, level]))
+    : [[null, 0], [null, 3]];
+  for (const [ahead, level] of [...tries, [null, 3]]) {
+    const source = draw(ahead, level);
+    if (source.length <= LIMIT) {
+      return { source, ahead, level };
+    }
+  }
+  return { source: draw(null, 3), ahead: null, level: 3 };
+}
+
 // ── the theme ────────────────────────────────────────────────────────────────
 async function show($) {
   return await $.theme.set({ backdrop: { scene: ID, glass } });
@@ -830,10 +848,10 @@ export function register(on) {
       // The workers' times on the play's clock: seconds since the village opened.
       const onClock = (ms) => (Number.isFinite(ms) && ms !== null ? (ms - startedAt) / 1000 : -Infinity);
       const workers = jobBoard.workers.map((w) => ({ ...w, startedAt: onClock(w.startedAt), since: onClock(w.since) }));
-      const faces = bustIds(jobBoard.notes);
       const shownHour = hour + minute / 60;
-      const draw = (ahead) =>
-        villageScene({
+      const draw = (ahead, level) => {
+        const faces = level < 3 ? bustIds(jobBoard.notes) : [];
+        return villageScene({
           hour,
           minute,
           second: hourShown === undefined ? day.getSeconds() + day.getMilliseconds() / 1000 : 0,
@@ -842,19 +860,15 @@ export function register(on) {
           startAt,
           weather: sky,
           board,
-          jobs: { notes: jobBoard.notes, extra: jobBoard.extra, faces: true },
+          jobs: { notes: jobBoard.notes, extra: jobBoard.extra, faces: level < 3 },
           // With no cast drawn, the notes' faces still need their frames.
-          actors: ahead === null ? frameDefs(faces, shownHour) : play(startAt, words, shownHour, ahead, onStage, { workers, also: faces }),
+          actors:
+            ahead === null
+              ? frameDefs(faces, shownHour)
+              : play(startAt, words, shownHour, ahead, onStage, { workers, also: faces, plain: Math.min(level, 2) }),
         }).replace("<svg ", `<svg preserveAspectRatio="xMidYMax slice" `);
-      // The whole play (0) if it fits, else a shorter look ahead; the scene alone at worst.
-      let source = "";
-      let ahead = null;
-      for (ahead of isCast ? [0, ...AHEADS, null] : [null]) {
-        source = draw(ahead);
-        if (source.length <= LIMIT) {
-          break;
-        }
-      }
+      };
+      const { source, ahead } = pickPicture(draw, isCast);
       lately = { key, at: now, source };
       redrawAt = ahead ? now + (ahead - SPARE) * 1000 : 0;
       // A friend whose job ended meets the loop again RETURN_MS on: a picture then.
