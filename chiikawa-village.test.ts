@@ -27,14 +27,30 @@ const BACKDROP = {
   props: { id: 'village', scene: 'village', plugin: 'chiikawa-village', glass: { blur: 16, opacity: 0.7, tint: '#1b2233' } },
 } as const
 
-// Stands for the engine: what the village reads and asks for, recorded.
-const engine = (on, list: () => { id: string; status: string; type: string; description: string }[] = () => []) => {
+// A five-hour window that starts over two hours after the tests' clock starts.
+const FIVE = (percentUsed: number) => ({ kind: 'five_hour', percentUsed, resetsAt: new Date(1_000_000 + 2 * 3_600_000).toISOString() })
+
+// Stands for the engine: what the village reads and asks for, recorded. `limits` is what
+// this session's own last response said of the rate-limit windows; `stored` is the
+// plugin's store, the one file every session of the person's reads and writes.
+const engine = (
+  on,
+  list: () => { id: string; status: string; type: string; description: string }[] = () => [],
+  { limits = () => [], stored = {} }: { limits?: () => unknown[]; stored?: Record<string, unknown> } = {},
+) => {
   const opened = []
   const closed = []
   const toasts = []
   let n = 0
-  on('session.usage', () => ({ value: { startedAt: 0, rateLimits: [], context: { window: 1000, percent: 10 } } }))
+  on('session.usage', () => ({ value: { startedAt: 0, rateLimits: limits(), context: { window: 1000, percent: 10 } } }))
+  on('store.get', (_, e) => ({ value: stored[e.key] }))
+  on('store.set', (_, e) => {
+    stored[e.key] = e.value
+
+    return { value: undefined }
+  })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.measure', (_, e) => ({ changed: e.changed }))
   on('command.register', () => ({ value: undefined }))
   on('theme.set', () => ({ value: { isDrawn: true } }))
   on('theme.clear', () => ({ value: undefined }))
@@ -61,7 +77,7 @@ const engine = (on, list: () => { id: string; status: string; type: string; desc
     return Text({ children: 'engine' })
   })
 
-  return { opened, closed, toasts }
+  return { opened, closed, toasts, stored }
 }
 
 const label = async ui => (await ui.find({ type: 'Button', key: 'open-village-jobs' }))?.text
@@ -238,4 +254,47 @@ test('cast off keeps face defs', async ($, on) => {
   const mode = await $.ui.mount({ ...MODE, surface: 'desktop' })
   expect(await label(mode)).toBe('📌 1')
   await mode.unmount()
+})
+
+// The rate-limit windows are the account's, but each session knows only what its own
+// last response said: the sessions leave their readings in the store for each other.
+test('a newer reading another session left shows here, with no chat here', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  engine(on, () => [], { limits: () => [FIVE(40)], stored: { limits: [FIVE(61)] } })
+
+  await $.session.start(SESSION)
+  const { text } = await $.command.run({ command: 'village', args: '자동' })
+
+  expect(text).toContain('five_hour 61%')
+})
+
+test('a reading measured here is left for the other sessions', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const seen = engine(on)
+
+  await $.session.start(SESSION)
+  await $.session.measure({ context: { window: 1000, percent: 10 }, rateLimits: [FIVE(55)], changed: ['rateLimits'] })
+
+  expect(seen.stored.limits).toEqual([FIVE(55)])
+})
+
+test('a newer reading from elsewhere redraws the sign within a minute and a half, with no turn here', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  const seen = engine(on, () => [], { limits: () => [FIVE(40)] })
+
+  await $.session.start(SESSION)
+  // With the cast off a picture stands until what it shows changes; 40 to 42 stays in
+  // one 5% step, so only the new figure can make the new picture.
+  await $.command.run({ command: 'village', args: 'cast off' })
+  const ui = await $.ui.mount({ ...BACKDROP, surface: 'desktop' })
+  const source = async () => String((await ui.find({ type: 'Svg' }))?.props.source)
+  const before = await source()
+
+  await clock.advance(90_000)
+  expect(await source()).toBe(before)
+
+  seen.stored.limits = [FIVE(42)]
+  await clock.advance(90_000)
+  expect(await source()).not.toBe(before)
+  await ui.unmount()
 })

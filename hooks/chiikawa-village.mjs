@@ -45,6 +45,17 @@ const LIMIT = 131072;
 const SKY_MINUTES = 15;
 let redrawAt = 0;
 let limitsSeen = ""; // the rate-limit windows as last read, shown by `/village`
+// The rate-limit windows are the account's, but a session knows only what its own last
+// response said: each session leaves its readings in the plugin's store (one file all
+// the person's sessions share) and the sign shows the newest. An idle session looks
+// there this often, and a figure read since the last picture makes a new one, at most
+// once a minute.
+const LIMITS_KEY = "limits";
+const LIMITS_EVERY = 15_000;
+const LIMITS_MIN_MS = 60_000;
+// Reset times read this close together are one window.
+const SAME_WINDOW_MS = 60_000;
+let limitsLookedAt = 0;
 
 // Who is on stage (`/village who`), by the play's names.
 const CAST_NAMES = { 하치와레: "hachiware", 치이카와: "chiikawa", 우사기: "usagi", 모몽가: "momonga", 쿠리만쥬: "kurimanju", 랏코: "rakko" };
@@ -203,14 +214,58 @@ function resetNote(at, isWeek) {
     : `~${day.getHours()}:${String(day.getMinutes()).padStart(2, "0")}`;
 }
 
+// The newest reading of each rate-limit window among several sessions': a later window
+// wins (its reset time later by more than SAME_WINDOW_MS), within one the higher figure,
+// as use only grows in a window. A window past its reset time has no reading, and what
+// is not a reading is left out. In the order each window is first seen.
+export function newestLimits(now, ...lists) {
+  const best = new Map();
+  for (const list of lists) {
+    if (!Array.isArray(list)) {
+      continue;
+    }
+    for (const limit of list) {
+      if (!limit || typeof limit.kind !== "string" || !Number.isFinite(limit.percentUsed)) {
+        continue;
+      }
+      const resets = Date.parse(limit.resetsAt ?? "");
+      if (resets <= now) {
+        continue;
+      }
+      const held = best.get(limit.kind);
+      const heldResets = held ? Date.parse(held.resetsAt ?? "") : NaN;
+      // NaN on either side compares false: an unknown reset time is the same window.
+      const isLater = resets - heldResets > SAME_WINDOW_MS;
+      const isEarlier = heldResets - resets > SAME_WINDOW_MS;
+      if (!held || isLater || (!isEarlier && limit.percentUsed > held.percentUsed)) {
+        best.set(limit.kind, limit);
+      }
+    }
+  }
+  return [...best.values()];
+}
+
+// What the other sessions left in the store; nothing when it can't be read.
+async function storedLimits($) {
+  try {
+    return await $.store.get(LIMITS_KEY);
+  } catch {
+    return undefined;
+  }
+}
+
+// The figures the sign writes, and the reset times under them.
+const figuresOf = (rows) => (rows ?? []).map((row) => `${Number.isFinite(row.percent) ? Math.round(row.percent) : ""}${row.note ?? ""}`).join(",");
+
 // The board's rows: the five-hour and weekly windows, then the context window. A
 // window with no reading yet keeps its row, empty.
 async function boardRows($) {
   try {
     const { context, rateLimits } = await $.session.usage();
-    limitsSeen = rateLimits.map((limit) => `${limit.kind} ${limit.percentUsed}%`).join(" · ");
-    const five = rateLimits.find((limit) => limit.kind === "five_hour");
-    const week = rateLimits.find((limit) => limit.kind === "seven_day");
+    const limits = newestLimits(await $.clock.now(), rateLimits, await storedLimits($));
+    limitsSeen = limits.map((limit) => `${limit.kind} ${limit.percentUsed}%`).join(" · ");
+    const five = limits.find((limit) => limit.kind === "five_hour");
+    const week = limits.find((limit) => limit.kind === "seven_day");
     return [
       { key: "five", percent: five?.percentUsed, note: resetNote(five?.resetsAt, false) },
       { key: "week", percent: week?.percentUsed, note: resetNote(week?.resetsAt, true) },
@@ -533,6 +588,20 @@ export function register(on) {
     return result;
   });
 
+  // A reading of the windows this session's response brought is left for the others.
+  on("session.measure", async ($, e, next) => {
+    const result = await next(e);
+    if (e.changed?.includes("rateLimits") && e.rateLimits?.length) {
+      try {
+        const now = await $.clock.now();
+        await $.store.set(LIMITS_KEY, newestLimits(now, await storedLimits($), e.rateLimits));
+      } catch {
+        // The others read this session's figures from its next measure.
+      }
+    }
+    return result;
+  });
+
   // A new agent pins a note and sends a friend to the field; nothing opens.
   on("agent.spawn", async ($, e, next) => {
     const result = await next(e);
@@ -833,13 +902,17 @@ export function register(on) {
     // a figure moving a step of 5% makes one.
     const board = await boardRows($);
     const steps = isCast ? "" : (board ?? []).map((row) => Math.floor((row.percent ?? -5) / 5)).join(",");
+    // A figure read since the last picture (here or in another session) makes a new
+    // one once that picture has stood a minute, so the sign keeps up with no turn here.
+    const figures = figuresOf(board);
+    const isBehind = figures !== lately.figures && now - lately.at >= LIMITS_MIN_MS;
     // The job board: a start, an end, a wait or a note falling makes a new picture; the
     // minutes on the notes ride along with the next one (with the cast off, they make one).
     const jobBoard = boardOf(jobs, now);
     const jobKey = boardKey(jobBoard) + (isCast ? "" : `:${jobBoard.notes.map((n) => n.minutes).join(",")}`);
     const key = `${hour}:${quarter}:${sky}:${isCast}:${onStage.join(",")}:${steps}:${words.map((w) => `${w.who}:${w.text}`).join("|")}:${jobKey}`;
     const isDue = redrawAt && now >= redrawAt;
-    if (lately.key !== key || isDue) {
+    if (lately.key !== key || isDue || isBehind) {
       const startAt = Math.max(0, now - startedAt) / 1000;
       // The workers' times on the play's clock: seconds since the village opened.
       const onClock = (ms) => (Number.isFinite(ms) && ms !== null ? (ms - startedAt) / 1000 : -Infinity);
@@ -865,7 +938,7 @@ export function register(on) {
         }).replace("<svg ", `<svg preserveAspectRatio="xMidYMax slice" `);
       };
       const { source, ahead } = pickPicture(draw, isCast);
-      lately = { key, at: now, source };
+      lately = { key, at: now, source, figures };
       redrawAt = ahead ? now + (ahead - SPARE) * 1000 : 0;
       // The whole play in one picture would hold the notes' minutes still: a running
       // note's next minute brings the next picture.
@@ -918,6 +991,14 @@ async function tick($) {
     // The sky's next quarter hour, or a shorter look ahead running out.
     if (isOn && (isChatter || isNewQuarter || (isCast && redrawAt && now >= redrawAt))) {
       $.ui.invalidate("ui.render");
+    }
+    // Now and then a look at the windows as the other sessions last read them: a figure
+    // the picture doesn't show yet asks for one, once the picture has stood a minute.
+    if (isOn && lately.source && now - limitsLookedAt >= LIMITS_EVERY) {
+      limitsLookedAt = now;
+      if (figuresOf(await boardRows($)) !== lately.figures && now - lately.at >= LIMITS_MIN_MS) {
+        $.ui.invalidate("ui.render");
+      }
     }
   } catch {
     // The next tick tries again.
