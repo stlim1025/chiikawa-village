@@ -4,6 +4,7 @@
 // the picture shows a back, walking down a face, walking across a side.
 
 import { SIZE, FEET, FRAMES } from "./cast-vec.mjs";
+import { RETURN_MS } from "./agents.mjs";
 
 export const LOOP = 120;
 const BASE = 118; // px a frame is drawn at, at the scene's scale 1
@@ -96,6 +97,12 @@ const ACTS = {
   train: (w) => ({
     slots: [[frame(w, "train0"), 0.4], [frame(w, "train1"), 0.4], [frame(w, "train0"), 0.4], [frame(w, "train1"), 0.4], [frame(w, "train0"), 1.6]],
   }),
+  // Out on the weeding field: tugging at a weed, the tug alone (one frame, a bob) when a
+  // picture has to be lighter, a rest while the job waits, and standing up.
+  pull: (w) => ({ slots: [[frame(w, "pull0", "idle"), 0.5], [frame(w, "pull1", "pull0", "idle"), 0.5]] }),
+  pullOne: (w) => ({ slots: [[frame(w, "pull0", "idle"), 1]], bounce: [4, 0.9] }),
+  rest: (w) => ({ slots: [[frame(w, "pull0", "idle"), 1]] }),
+  stand: (w) => ({ slots: [[frame(w, "idle", "sit", "hop0", "train0"), 1]] }),
 };
 function drawAct(act, who, startAt) {
   const { slots, bounce: b } = ACTS[act](who);
@@ -137,8 +144,9 @@ const PLAN = [
       { t: 0, x: 506, y: 880, act: "sit", face: -1 },
       { t: 34, x: 506, y: 880, act: "walk" },
       { t: 40, x: 540, y: 996, act: "walk" },
-      { t: 52, x: 190, y: 996, act: "idle" },
-      { t: 62, x: 190, y: 996, act: "walk" },
+      // Stands in front of the tea table, clear of the job board and the field.
+      { t: 52, x: 440, y: 893, act: "idle" },
+      { t: 62, x: 440, y: 893, act: "walk" },
       { t: 74, x: 540, y: 996, act: "walk" },
       { t: 80, x: 506, y: 880, act: "sit", face: -1 },
     ],
@@ -170,16 +178,17 @@ const PLAN = [
     who: "hachiware",
     speaks: true,
     stops: [
-      { t: 0, x: 296, y: 950, act: "idle" },
-      { t: 10, x: 296, y: 950, act: "walk" },
-      { t: 16, x: 430, y: 945, act: "idle" },
-      { t: 28, x: 430, y: 945, act: "walk" },
+      // Between the two cushions in front of the tea table, clear of the board and field.
+      { t: 0, x: 430, y: 896, act: "idle" },
+      { t: 10, x: 430, y: 896, act: "walk" },
+      { t: 16, x: 446, y: 894, act: "idle" },
+      { t: 28, x: 446, y: 894, act: "walk" },
       { t: 50, x: 1480, y: 996, act: "idle" },
       { t: 58, x: 1480, y: 996, act: "walk" },
       { t: 66, x: 1530, y: 830, act: "idle", face: -1 },
       { t: 76, x: 1530, y: 830, act: "walk" },
       { t: 84, x: 1480, y: 996, act: "walk" },
-      { t: 106, x: 296, y: 950, act: "idle" },
+      { t: 106, x: 430, y: 896, act: "idle" },
     ],
   },
 ];
@@ -309,12 +318,181 @@ function actor({ who, stops: planned, speaks }, startAt, said, window) {
 // (0~24, fractions allowed). With `ahead`, only what the next `ahead` seconds
 // draw: frames for later go in the next image. With `only`, just those of the cast
 // (by name) are on stage.
-export function play(startAt, said = "", hour = 12, ahead = 0, only = null) {
+// `workers`: those of the cast out on the weeding field for a job (agents.mjs), times in
+// seconds on this clock: each is drawn on its own way out and back in place of its part
+// in the loop. `also`: frames to define besides (the job notes' faces). `plain`: 1 tugs
+// with one frame, 2 has the workers stand, for a picture that must be lighter.
+export function play(startAt, said = "", hour = 12, ahead = 0, only = null, { workers = [], also = [], plain = 0 } = {}) {
   const window = ahead ? [startAt % LOOP, (startAt % LOOP) + ahead] : null;
-  const plan = only ? PLAN.filter((one) => only.includes(one.who)) : PLAN;
-  const parts = plan.map((one) => actor(one, startAt, said, window));
+  const onStage = only ? PLAN.filter((one) => only.includes(one.who)) : PLAN;
+  const out = workers.filter((w) => onStage.some((one) => one.who === w.who));
+  const plan = onStage.filter((one) => !out.some((w) => w.who === one.who));
   const n = nightness(hour);
+  const parts = [...plan.map((one) => actor(one, startAt, said, window)), ...out.map((w) => worker(w, startAt, plain, n))];
   const cast = parts.map((p) => p.body).join("");
   const keep = new Set(window ? usedFrames(window[0], window[1], plan) : usedFrames(0, LOOP, plan));
+  for (const w of out) for (const id of workerFrames(w, plain)) keep.add(id);
+  for (const id of also) keep.add(id);
   return castDefs(keep, n ? shade(n) : undefined) + cast + parts.map((p) => p.words).join("");
+}
+
+// Just these frames, shaded for the hour: the notes' faces when the cast is not drawn.
+export function frameDefs(ids, hour = 12) {
+  const n = nightness(hour);
+  return castDefs(new Set(ids), n ? shade(n) : undefined);
+}
+
+// ---- the weeding field ----
+// Where the workers stand in the field (scene.mjs draws it), how fast they walk there and
+// back (the loop's own pace), and what one says when its job is done.
+export const SLOTS = [{ x: 372, y: 975 }, { x: 500, y: 976 }, { x: 436, y: 958 }];
+export const WALK_SPEED = 60;
+export const BUBBLE_S = 4;
+export const DONE_LINE = "끝났다!";
+// For the tests that keep the loop off the board and the field.
+export const PLAN_FOR_TEST = PLAN;
+
+const round2 = (v) => Math.round(v * 100) / 100;
+const distance = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+const toward = (a, b, k) => ({ x: round2(a.x + (b.x - a.x) * k), y: round2(a.y + (b.y - a.y) * k) });
+const walkAct = (a, b) => {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  return Math.abs(dy) > 0.7 * Math.abs(dx) ? (dy < 0 ? "up" : "down") : "across";
+};
+const facing = (a, b) => (b.x < a.x ? -1 : 1);
+
+// Where `who` is in the loop `t` seconds in, as the loop draws it.
+export function loopAt(who, t) {
+  const one = PLAN.find((p) => p.who === who);
+  if (!one) return null;
+  const stops = one.stops;
+  const into = ((t % LOOP) + LOOP) % LOOP;
+  const points = [...stops, { ...stops[0], t: LOOP }];
+  const at = stops.findLastIndex((p) => p.t <= into);
+  const from = points[at], to = points[at + 1];
+  const share = to.t > from.t ? (into - from.t) / (to.t - from.t) : 0;
+  return toward(from, to, share);
+}
+
+// When a worker whose job ended is back where the loop has it.
+export const returnAt = (w) => w.since + RETURN_MS / 1000;
+
+// A worker's way, as points in time ({ t, x, y }) and the acts it does from each time on
+// ({ t, act, face }), and a line to say ({ from, until, at }) or null.
+function wayOf(w, plain) {
+  const slot = SLOTS[w.slot] ?? SLOTS[0];
+  const fieldFace = w.slot === 1 ? -1 : 1;
+  const tug = plain >= 2 ? "stand" : plain === 1 ? "pullOne" : "pull";
+  const atWork = w.state === "wait" ? (plain >= 2 ? "stand" : "rest") : tug;
+  const s = Number.isFinite(w.startedAt) ? w.startedAt : -Infinity;
+  const from = Number.isFinite(s) ? loopAt(w.who, s) : slot;
+  const outFor = distance(from, slot) / WALK_SPEED;
+  const arrive = s + outFor;
+  const at = (t) => (!Number.isFinite(s) || outFor === 0 || t >= arrive ? slot : toward(from, slot, (t - s) / outFor));
+  if (w.state === "work" || w.state === "wait") {
+    if (!Number.isFinite(s) || outFor === 0) {
+      return { points: [{ t: -Infinity, ...slot }], acts: [{ t: -Infinity, act: atWork, face: fieldFace }], line: null };
+    }
+    return {
+      points: [{ t: s, ...from }, { t: arrive, ...slot }],
+      acts: [{ t: s, act: walkAct(from, slot), face: facing(from, slot) }, { t: arrive, act: atWork, face: fieldFace }],
+      line: null,
+    };
+  }
+  // Done or failed: up from where it is, a word if it went well, then home to meet the
+  // loop just as the next picture takes over.
+  const here = at(w.since);
+  const home = returnAt(w);
+  const target = loopAt(w.who, home);
+  const backFor = distance(here, target) / WALK_SPEED;
+  const leave = Math.max(w.since + BUBBLE_S, home - backFor);
+  const back = leave + backFor;
+  return {
+    points: [{ t: w.since, ...here }, { t: leave, ...here }, { t: back, ...target }],
+    acts: [
+      { t: w.since, act: "stand", face: fieldFace },
+      { t: leave, act: walkAct(here, target), face: facing(here, target) },
+      { t: back, act: "stand", face: facing(here, target) },
+    ],
+    line: w.state === "done" ? { from: w.since, until: w.since + BUBBLE_S, at: here } : null,
+  };
+}
+
+function workerFrames(w, plain) {
+  const ids = new Set();
+  for (const { act } of wayOf(w, plain).acts) for (const [name] of ACTS[act](w.who).slots) ids.add(name);
+  return ids;
+}
+
+// Grass thrown up by a worker's tugging: two blades bobbing over its hands.
+const BLADES =
+  `<g stroke="#62534e" stroke-width="2.6" stroke-linejoin="round">` +
+  [[42, -112, -20, 1.3], [68, -84, 30, 1.7]]
+    .map(
+      ([x, y, turn, dur]) =>
+        `<g transform="translate(${x} ${y})"><g><animateTransform attributeName="transform" type="translate" values="0 0;0 -11;0 0" dur="${dur}s" repeatCount="indefinite"/>` +
+        `<path transform="rotate(${turn})" d="M0 0q8-18 29-11q-6 18-29 11z" fill="#86c792"/></g></g>`,
+    )
+    .join("") +
+  `</g>`;
+
+// A worker drawn on its way: one go of each move, from the times on its way, held at
+// the end; the picture's own clock starts at `startAt`.
+function worker(w, startAt, plain, n) {
+  const way = wayOf(w, plain);
+  const { points, acts, line } = way;
+  const first = points[0].t;
+  const moves = points.length > 1 && Number.isFinite(first);
+  // Where it is now, and what it does now, so the first paint is right.
+  const posAt = (t) => {
+    if (!moves || t <= first) return points[0];
+    const i = points.findLastIndex((p) => p.t <= t);
+    const a = points[i], b = points[i + 1];
+    return b ? toward(a, b, (t - a.t) / (b.t - a.t || 1)) : a;
+  };
+  const actAt = (t) => acts[Math.max(0, acts.findLastIndex((p) => p.t <= t))];
+  const here = posAt(startAt);
+  const now = actAt(startAt);
+  // One timeline for all of it: from the way's start to a second past its last turn.
+  const last = Math.max(points[points.length - 1].t, acts[acts.length - 1].t);
+  const dur = moves ? last - first + 1 : 1;
+  const key = (t) => f2(Math.min(1, Math.max(0, (t - first) / dur)));
+  const timing = `dur="${f2(dur)}s" begin="${f2(first - startAt)}s" fill="freeze"`;
+  const pts = moves ? [...points, { ...points[points.length - 1], t: last + 1 }] : points;
+  const sizeOf = (p) => f2((BASE * scaleAt(p.y)) / SIZE);
+  const move = ` transform="translate(${f2(here.x)} ${f2(here.y)})"`;
+  const moving = moves
+    ? `<animateTransform attributeName="transform" type="translate" values="${pts.map((p) => `${p.x} ${p.y}`).join(";")}" keyTimes="${pts.map((p) => key(p.t)).join(";")}" ${timing}/>`
+    : "";
+  const sizing = moves
+    ? `<animateTransform attributeName="transform" type="scale" values="${pts.map(sizeOf).join(";")}" keyTimes="${pts.map((p) => key(p.t)).join(";")}" ${timing}/>`
+    : "";
+  const steps = moves ? [...acts, { ...acts[acts.length - 1], t: last + 1 }] : acts;
+  const stepTimes = steps.map((p) => key(p.t)).join(";");
+  const turning = moves && acts.some((p) => p.face !== acts[0].face)
+    ? `<animateTransform attributeName="transform" type="scale" values="${steps.map((p) => `${p.face} 1`).join(";")}" keyTimes="${stepTimes}" calcMode="discrete" ${timing}/>`
+    : "";
+  const kinds = [...new Set(acts.map((p) => p.act))];
+  const blades = n ? shade(n)(BLADES) : BLADES;
+  const groups = kinds
+    .map((act) => {
+      const shown =
+        kinds.length > 1 && moves
+          ? `<animate attributeName="opacity" values="${steps.map((p) => (p.act === act ? 1 : 0)).join(";")}" keyTimes="${stepTimes}" calcMode="discrete" ${timing}/>`
+          : "";
+      const tugging = act === "pull" || act === "pullOne" ? blades : "";
+      return `<g opacity="${act === now.act ? 1 : 0}">${shown}${drawAct(act, w.who, startAt)}${tugging}</g>`;
+    })
+    .join("");
+  const body = `<g${move}>${moving}<g transform="scale(${sizeOf(here)})">${sizing}<g transform="scale(${now.face} 1)">${turning}${groups}</g></g></g>`;
+  // The line, said where it stood up, for as long as BUBBLE_S.
+  let words = "";
+  if (line && startAt < line.until) {
+    const on = startAt >= line.from;
+    words =
+      `<g transform="translate(${f2(line.at.x)} ${f2(line.at.y)})" opacity="${on ? 1 : 0}">` +
+      (on ? "" : `<set attributeName="opacity" to="1" begin="${f2(line.from - startAt)}s" fill="freeze"/>`) +
+      `<set attributeName="opacity" to="0" begin="${f2(line.until - startAt)}s" fill="freeze"/>${bubble(DONE_LINE, -BASE * 1.02)}</g>`;
+  }
+  return { body, words };
 }
