@@ -285,7 +285,7 @@ const ICON = {
   other: '<path d="M0-5.2L1.5-1.5L5.2 0L1.5 1.5L0 5.2L-1.5 1.5L-5.2 0L-1.5-1.5Z"/>',
 };
 const KIND_TAG = { search: '#a9c9f0', write: '#cdbff0', review: '#a4da9f', other: '#ffd0a8' };
-const PINS = ['#f58d8d', '#ffd86b', '#a9c9f0', '#8fd6a6'];
+export const PINS = ['#f58d8d', '#ffd86b', '#a9c9f0', '#8fd6a6'];
 const STAMP = '#d8574f';
 // Each friend's bust on a note: its frame, and a square round the head in the frame's
 // own units (from the feet).

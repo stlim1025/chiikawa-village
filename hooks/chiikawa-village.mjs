@@ -7,7 +7,7 @@
 // only when what it shows changes; and a big area fading or lighting up at once (an
 // SVG filter, a whole-view flash) stops the picture from moving in the app.
 
-import { villageScene, bustIds, BUSTS, plankSvg, stampSvg } from "./scene.mjs";
+import { villageScene, bustIds, BUSTS, PINS, plankSvg, stampSvg } from "./scene.mjs";
 import { villageButton, VARIANTS } from "./button.mjs";
 import { play, frameDefs, castDefs } from "./play.mjs";
 import { addJob, noteTool, noteAnswered, settle, boardOf, boardKey, nextMinuteAt, ENDED, RETURN_MS, GONE_MS } from "./agents.mjs";
@@ -738,6 +738,10 @@ export function register(on) {
   // The notes unfolded above the prompt: a note for each job, as on the board, with
   // what the board can't show. Above the prompt, not in a pane at the side, so the
   // conversation is never pushed aside; a survey there has the band to itself.
+  // The band is the village's board itself, in its colours: the wood frame, the pink
+  // roof ridge across the top with the name plank on it, the pale panel, and on the
+  // panel a paper note for each job under its pin. The app's own surface shows round
+  // the tree, so every part of the board is a filled Box.
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     // Folded, a survey up, or no one working (the label is gone then): the band as it was.
     if (!areNotesOpen || e.props.hasSurvey || !working()) {
@@ -746,10 +750,12 @@ export function register(on) {
     const { Box, Text, Svg } = $.ui.resolve(e);
     const now = await $.clock.now();
     const shown = jobs.filter((job) => job.endedAt === null || now < job.endedAt + GONE_MS);
-    const head = Svg
+    // The terminal has no Svg: its plank is a pale cell strip with the name on it.
+    const plank = Svg
       ? Svg({ source: plankSvg(), alt: "일거리 게시판", height: 30 })
-      : Text({ bold: true, color: INK, children: "일거리 게시판" });
-    const card = (job) => {
+      : Box({ backgroundColor: "#f6e6c8", paddingX: 1, children: [Text({ bold: true, color: INK, children: "일거리 게시판" })] });
+    const head = Box({ key: "village-job-ridge", flexDirection: "row", justifyContent: "center", backgroundColor: "#f5a9bb", children: [plank] });
+    const card = (job, i) => {
       const s = STATUS[job.status] ?? STATUS.running;
       const ms = ranFor(job, now);
       const minutes = ms === null ? "시간 모름" : ms < 60000 ? "방금" : `${Math.floor(ms / 60000)}분째`;
@@ -758,16 +764,22 @@ export function register(on) {
       const face = Svg && bust
         ? [Svg({ source: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bust[1]}">${castDefs(new Set([`${job.worker}-${bust[0]}`]))}<use href="#cv-f-${job.worker}-${bust[0]}"/></svg>`, alt: NAMES[job.worker], width: 24, height: 24 })]
         : [];
+      // The note's pin, in the board's pin colours by turn.
+      const pin = Svg
+        ? [Svg({ source: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-6 -6 12 12"><circle r="4" fill="${PINS[i % PINS.length]}" stroke="#6b5a55" stroke-width="1.5"/></svg>`, alt: "핀", width: 12, height: 12 })]
+        : [];
       const stamp = Svg && job.endedAt !== null ? [Svg({ source: stampSvg(job.status === "completed" ? "done" : "fail"), alt: s.word, width: 18, height: 18 })] : [];
       const lines = [
         Box({
           flexDirection: "row",
           columnGap: 1,
+          alignItems: "center",
           children: [
+            ...pin,
             ...face,
             Text({ bold: true, color: INK, children: who }),
             Text({ color: INK, dimColor: true, children: job.type }),
-            Text({ ...(s.color ? { color: s.color } : { dimColor: true }), children: `${s.mark} ${s.word}` }),
+            Text({ ...(s.color ? { color: s.color } : { color: INK, dimColor: true }), children: `${s.mark} ${s.word}` }),
             Text({ color: INK, children: minutes }),
             ...stamp,
           ],
@@ -785,15 +797,18 @@ export function register(on) {
               Text({ color: INK, dimColor: true, children: `도구 ${job.toolCount}회  ` }),
               ...job.history.map((tool) => {
                 const kind = KINDS.find((k) => k.tools.includes(tool));
-                return Text(kind ? { color: kind.color, children: "■" } : { dimColor: true, children: "■" });
+                return Text(kind ? { color: kind.color, children: "■" } : { color: INK, dimColor: true, children: "■" });
               }),
             ],
           }),
         );
       }
-      return Box({ flexDirection: "column", backgroundColor: "#fff5df", borderStyle: "round", borderColor: "#b78b6a", paddingX: 1, children: lines });
+      // Ink on paper throughout: the app's own text colour is for its dark surface.
+      return Box({ key: `village-job-note-${i}`, flexDirection: "column", backgroundColor: "#fffaf0", borderStyle: "round", borderColor: "#6b5a55", paddingX: 1, children: lines });
     };
-    return Box({ flexDirection: "column", rowGap: 1, children: [head, ...shown.map(card)] });
+    const panel = Box({ key: "village-job-panel", flexDirection: "column", backgroundColor: "#f6e6c8", paddingX: 1, children: shown.map(card) });
+    // The frame's wood shows at both sides and as the rail under the panel.
+    return Box({ key: "village-job-board", flexDirection: "column", backgroundColor: "#c9a07e", paddingX: 1, paddingBottom: 1, children: [head, panel] });
   });
 
   on("ui.render", { component: "Backdrop" }, async ($, e, next) => {

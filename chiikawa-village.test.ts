@@ -151,6 +151,27 @@ for (const surface of ['terminal', 'desktop'] as const) {
     }
     await ui.unmount()
   })
+
+  test(`the unfolded notes hang on the board, in the village board's wood and panel (${surface})`, async ($, on) => {
+    mock.clock(on, { now: 1_000_000 })
+    engine(on, () => [{ id: 'a1', status: 'running', type: 'Explore', description: '찾기' }])
+
+    await $.session.start({ ...SESSION, surface })
+    await $.agent.spawn(SPAWN)
+    const mode = await $.ui.mount({ ...MODE, surface })
+    await mode.press({ key: 'open-village-jobs' })
+    const ui = await $.ui.mount({ ...BAND, surface })
+
+    // The band is the board itself, not the app's own surface: the frame's wood and the
+    // pale panel inside it, the colours the board in the village is drawn in.
+    const board = await ui.find({ type: 'Box', key: 'village-job-board' })
+    const panel = await ui.find({ type: 'Box', key: 'village-job-panel' })
+    expect(board?.props.backgroundColor).toBe('#c9a07e')
+    expect(panel?.props.backgroundColor).toBe('#f6e6c8')
+    expect(await ui.find({ type: 'Text', text: '치이카와가 맡았어요' })).toBeDefined()
+    await ui.unmount()
+    await mode.unmount()
+  })
 }
 
 test('the backdrop key moves on start and end, not on tools', async ($, on) => {
