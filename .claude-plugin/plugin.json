@@ -1,5 +1,5 @@
 {
   "name": "chiikawa-village",
-  "version": "0.2.0",
-  "description": "The Chiikawa village behind the conversation in the desktop app: sky, clock and weather that follow the hour and the context window, the cast walking about, talking among themselves and about the work."
+  "version": "0.3.0",
+  "description": "The Chiikawa village behind the conversation in the desktop app: sky, clock and weather that follow the hour and the context window, the cast walking about, talking among themselves and about the work, and a job board where friends pull weeds while agents run."
 }
