@@ -689,18 +689,6 @@ export function register(on) {
         isCast = true;
         return redraw(`무대에: ${onStage.join(", ")}`);
       }
-      case "probe": {
-        // TEMPORARY (plan Task 1): the same picture sent again every second, to see
-        // whether a redraw of our own rewinds the backdrop. Removed after the check.
-        let left = 30;
-        const probe = $.clock.every(1000, () => {
-          $.ui.invalidate("ui.render");
-          if (--left <= 0) {
-            probe.cancel();
-          }
-        });
-        return { text: "30초 동안 1초마다 다시 그립니다." };
-      }
       default:
         return { text: HELP + state() };
     }
