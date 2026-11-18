@@ -245,6 +245,7 @@ const GLYPH = {
   ':': [2, 3, 'v.1m0 6v.1', 7],
   '~': [0, 7, 'q2-3 4 0t4 0'],
   '/': [1, 12, 'l6-12', 9],
+  '+': [0, 6, 'h8m-4-4v8'],
 };
 // A row's mark, in a box 16 square: an hourglass, a calendar page, a speech bubble.
 const MARK = {
@@ -253,12 +254,70 @@ const MARK = {
   context: [1, 2, 'h14v9h-7l-4 4v-4h-3z'],
 };
 
+// The job board's name in the same round pen: each syllable is where the pen starts in a
+// box 12 square, the strokes from there, and (if not 15) how far the next one stands.
+const HANGUL = {
+  일: [3.5, 0.5, 'a2.5 2.5 0 1 1-.1 0m6.6-.5v6m-8 1.5h8v2.2h-8v2.3h8.5'],
+  거: [1, 1.5, 'h5.5q0 6-5 9.5m9-11v12m-3.7-6.5h3.7'],
+  리: [1, 1.5, 'h5.5v3.6h-5.5v4.6h6m3.5-9.7v12'],
+  게: [0.5, 1.5, 'h4.5q0 6-4.5 9.5m7.5-11v12m-2.4-6.5h2.4m3.2-5.5v12'],
+  시: [4, 1.5, 'q-.3 5.5-3.5 9m3.6-5.2q1 3.2 3.6 5.2m2.8-10.5v12'],
+  판: [1, 1, 'h6m-4.3 0v5.5m2.6-5.5v5.5m-4.8 0h7m2.5-6.5v7.5m0-4h2m-10 5v3.5h9'],
+  ' ': [0, 0, '', 6],
+};
+const BOARD_NAME = '일거리 게시판';
+// Written from x, the tops at y; and how wide.
+const letter = (str, x, y) => {
+  let d = '';
+  for (const ch of str) {
+    const g = HANGUL[ch];
+    if (g && g[2]) d += `M${f2(x + g[0])} ${f2(y + g[1])}${g[2]}`;
+    x += (g && g[3]) || 15;
+  }
+  return d;
+};
+const letterWidth = (str) => [...str].reduce((w, ch) => w + ((HANGUL[ch] && HANGUL[ch][3]) || 15), -3);
+// What sort of job a note is for: a mark in a box 12 square round its middle.
+const ICON = {
+  search: '<circle cx="-1.5" cy="-1.5" r="3.8"/><path d="M1.4 1.4L5.2 5.2"/>',
+  write: '<path d="M-5.2 5.2L-4 1.4L2.2-4.8L4.8-2.2L-1.4 4Z"/><path d="M.6-3.2L3.2-.6"/>',
+  review: '<circle cx="-3.4" cy=".6" r="2.6"/><circle cx="3.4" cy=".6" r="2.6"/><path d="M-.8.2q.8-1 1.6 0M-6-.2L-6.4-2.6M6-.2L6.4-2.6"/>',
+  other: '<path d="M0-5.2L1.5-1.5L5.2 0L1.5 1.5L0 5.2L-1.5 1.5L-5.2 0L-1.5-1.5Z"/>',
+};
+const KIND_TAG = { search: '#a9c9f0', write: '#cdbff0', review: '#a4da9f', other: '#ffd0a8' };
+const PINS = ['#f58d8d', '#ffd86b', '#a9c9f0', '#8fd6a6'];
+const STAMP = '#d8574f';
+// Each friend's bust on a note: its frame, and a square round the head in the frame's
+// own units (from the feet).
+export const BUSTS = {
+  chiikawa: ['idle', '-54 -127 108 108'],
+  hachiware: ['idle', '-54 -131 108 108'],
+  usagi: ['hop0', '-62 -173 124 124'],
+  kurimanju: ['sit', '-54 -108 108 108'],
+  momonga: ['idle', '-52 -126 108 108'],
+  rakko: ['train0', '-49 -128 108 108'],
+};
+// The cast frames the notes' faces use, as `${who}-${pose}`, each once: the pinned notes
+// only (the first four), since one lying on the grass shows its stamp and no face.
+export function bustIds(notes) {
+  const ids = [];
+  for (const note of (notes ?? []).filter((n) => n && !n.isFallen).slice(0, 4)) {
+    const bust = note && note.who && BUSTS[note.who];
+    if (bust && !ids.includes(`${note.who}-${bust[0]}`)) ids.push(`${note.who}-${bust[0]}`);
+  }
+  return ids;
+}
+
 // `clock` is the time on the house clock, { hour, minute, second }, when it is not the
 // hour the sky shows (a part of the day picked by hand).
 // `board` is up to four rows for the notice board on the cherry tree,
 // { key: 'five' | 'week' | 'context', percent (0..100, may be missing), note (digits and : ~ /) };
 // none, and there is no board.
-export function villageScene({ hour, minute, second = 0, startAt = 0, weather = 'clear', actors = '', clock = null, board = null } = {}) {
+// `jobs` is the job board on the lawn and the weeding field beside it, { notes, extra,
+// faces }: notes as agents.mjs makes them ({ who, kind, minutes, mark, isFallen }), how
+// many more there are than the board holds, and whether the notes show faces (their
+// frames, `bustIds(notes)`, are defined by the caller with the cast). null: neither.
+export function villageScene({ hour, minute, second = 0, startAt = 0, weather = 'clear', actors = '', clock = null, board = null, jobs = null } = {}) {
   const hr = Number(hour);
   const mn = Number(minute);
   const hh = Number.isFinite(hr) ? ((Math.floor(hr) % 24) + 24) % 24 : 12;
@@ -929,8 +988,124 @@ export function villageScene({ hour, minute, second = 0, startAt = 0, weather = 
     );
   }
 
+  // ================= the job board and the weeding field =================
+  // A wooden board on two legs on the lawn under the cherry tree, a little plank on its
+  // pink ridge lettered 일거리 게시판, a note pinned for each of the session's jobs; beside
+  // it, between the tea table and the stepping stones, a patch of tall grass where the
+  // friends out on a job pull weeds. The grass in front of them goes in the front layer.
+  let fieldFront = '';
+  if (jobs) {
+    const pale = c('#f6e6c8');
+    const [pr, pg, pb] = hx(pale);
+    // Pale wood takes dark writing and dark wood pale writing, as on the usage sign.
+    const dim = pr * 0.3 + pg * 0.59 + pb * 0.11 < 135;
+    const own = (hex) => (dim ? mix(c(hex), hex, 0.7) : c(hex)); // things with a colour of their own
+    const ink = dim ? '#fff3d6' : c('#5b4038');
+    const paper = dim ? mix(c('#fffaf0'), '#fffaf0', 0.12) : c('#fffaf0');
+    const plankWood = dim ? mix(c('#9a7762'), '#ffdf8e', 0.1 * L) : pale;
+    const digits = (str, x, y) => {
+      let d = '';
+      for (const ch of String(str)) {
+        const g = GLYPH[ch];
+        if (!g) continue;
+        d += `M${f(x + g[0])} ${f(y + g[1])}${g[2]}`;
+        x += g[3] || 11;
+      }
+      return d;
+    };
+    const digitsWidth = (str) => [...String(str)].reduce((w, ch) => w + ((GLYPH[ch] && GLYPH[ch][3]) || 11), -3);
+    const pen = (width) => `fill="none" stroke="${ink}" stroke-width="${width}"`;
+    // A flower-circle stamp: a spiral with a ring of petals, no letters.
+    const hanamaru = (r) => {
+      const k = r / 11;
+      let ring = '';
+      for (let i = 0; i <= 7; i++) {
+        const a = (i / 7) * Math.PI * 2 - Math.PI / 2;
+        const p = `${f(Math.cos(a) * 9.2 * k)} ${f(Math.sin(a) * 9.2 * k)}`;
+        ring += i ? `A${f(3.3 * k)} ${f(3.3 * k)} 0 0 1 ${p}` : `M${p}`;
+      }
+      const s = (v) => f(v * k);
+      return `<g fill="none" stroke="${dim ? mix(STAMP, '#ff8f86', 0.5) : STAMP}" stroke-width="${f(2 * k)}"><path d="M0 0a${s(1.6)} ${s(1.6)} 0 0 1 ${s(3.2)} 0a${s(3.2)} ${s(3.2)} 0 0 1 ${s(-6.4)} 0a${s(4.8)} ${s(4.8)} 0 0 1 ${s(9.6)} 0a${s(6)} ${s(6)} 0 0 1 ${s(-11.2)} ${s(2)}"/><path d="${ring}"/></g>`;
+    };
+    // A job that failed or was stopped: a grey cross, no letters.
+    const cross = (r) => `<path d="M${-r} ${-r}L${r} ${r}M${r} ${-r}L${-r} ${r}" fill="none" stroke="${own('#8a8580')}" stroke-width="${f(r / 3)}"/>`;
+    const stamp = (mark, r) => (mark === 'done' ? hanamaru(r) : mark === 'fail' ? cross(r * 0.7) : '');
+    const showsFace = (n) => jobs.faces !== false && n.who && BUSTS[n.who];
+    // One note, pinned at its top middle.
+    const note = (n, x, y, turn, pin) => {
+      const tag = own(KIND_TAG[n.kind] || KIND_TAG.other);
+      const mins = Number.isFinite(n.minutes) ? String(Math.max(0, Math.floor(n.minutes))) : '';
+      const minutes = mins ? `<path transform="translate(${f(14 - digitsWidth(mins) * 0.8)} 43)scale(.8)" d="${digits(mins, 0, 0)}" ${pen(2.6)}/>` : '';
+      let inner;
+      if (showsFace(n)) {
+        const [pose, box] = BUSTS[n.who];
+        inner =
+          `<circle cy="22" r="13" fill="${tag}" stroke="none"/><svg x="-14" y="8" width="28" height="28" viewBox="${box}"><use href="#cv-f-${n.who}-${pose}"/></svg>` +
+          `<g transform="translate(-9 48)" ${pen(1.7)}>${ICON[n.kind] || ICON.other}</g>${minutes}`;
+      } else {
+        inner = `<circle cy="22" r="13" fill="${tag}" stroke="none"/><g transform="translate(0 22)scale(1.4)" ${pen(1.4)}>${ICON[n.kind] || ICON.other}</g>${minutes}`;
+      }
+      const isOver = n.mark === 'done' || n.mark === 'fail';
+      return (
+        `<g transform="translate(${f(x)} ${y})rotate(${turn})"><rect x="-18" width="36" height="60" rx="3" fill="${paper}" stroke-width="1.6"/>` +
+        (isOver ? `<g opacity=".5">${inner}</g><g transform="translate(4 46)rotate(-12)">${stamp(n.mark, 10)}</g>` : inner) +
+        (n.mark === 'wait' ? `<g transform="translate(15 5)"><circle r="6.5" fill="${own('#ffd86b')}" stroke-width="1.5"/><path d="M-3 0v.1M0 0v.1M3 0v.1" stroke-width="1.8"/></g>` : '') +
+        `<circle cy="2" r="4" fill="${own(pin)}" stroke-width="1.5"/></g>`
+      );
+    };
+    const w = 184, half = 92, rail = 8, h = 84, foot = 110, step = 40;
+    const pinned = (jobs.notes || []).filter((n) => !n.isFallen).slice(0, 4);
+    const fallen = (jobs.notes || []).filter((n) => n.isFallen).slice(-2);
+    const turns = [-3, 2, -2, 3];
+    let slots = '';
+    for (let i = 0; i < 4; i++) {
+      const x = (i - 1.5) * step;
+      slots += pinned[i] ? note(pinned[i], x, rail + 4, turns[i], PINS[i]) : `<circle cx="${f(x)}" cy="${rail + 8}" r="3.2" fill="${c('#cfc1b0')}" stroke-width="1.4"/>`;
+    }
+    // The finished notes that fell, lying on the grass by the right leg.
+    const lying = fallen
+      .map((n, i) => `<g transform="translate(${half - 4 - i * 34} ${foot - 3 + i * 4})rotate(${i ? 12 : -20})"><path d="M-14-10H14V10H-14Z" fill="${paper}" stroke-width="1.6"/><g transform="translate(2 0)">${stamp(n.mark, 7)}</g></g>`)
+      .join('');
+    // More jobs than pins: a paper tag under the board, +N in the sign's digits.
+    const more = jobs.extra > 0 ? `<g transform="translate(${half - 34} ${h + 6})"><rect width="28" height="15" rx="2" fill="${paper}" stroke-width="1.4"/><path transform="translate(3 2.5)scale(.8)" d="${digits('+' + Math.min(99, jobs.extra), 0, 0)}" ${pen(2.4)}/></g>` : '';
+    const nameW = letterWidth(BOARD_NAME) * 1.1;
+    const tuft = (x, s) => `<use href="#cv-g" transform="translate(${x} ${foot + 2})scale(${s})" stroke-width="2"/>`;
+    o.push(
+      `<g id="cv-jb" transform="translate(196 858)" ${OUT}>` +
+        `<rect x="${-half + 16}" y="10" width="12" height="${foot - 10}" rx="3" fill="${c('#b98a6a')}"/><rect x="${half - 28}" y="10" width="12" height="${foot - 10}" rx="3" fill="${c('#b98a6a')}"/>` +
+        `<rect x="${-half}" y="5" width="${w}" height="${h}" rx="9" fill="${c('#9a7762')}"/><rect x="${-half}" width="${w}" height="${h}" rx="9" fill="${c('#c9a07e')}"/>` +
+        `<rect x="${-half + 7}" y="${rail}" width="${w - 14}" height="68" rx="5" fill="${pale}" stroke-width="1.8"/>` +
+        `<path d="M${-half - 9} 3Q0-19 ${half + 9} 3L${half + 9}-8Q0-31 ${-half - 9}-8Z" fill="${c('#f5a9bb')}"/><path d="M${-half + 8}-9Q0-25 ${half - 8}-9" fill="none" stroke="${c('#fbc9d4')}" stroke-width="3.5"/>` +
+        `<rect x="-64" y="-23" width="128" height="22" rx="6" fill="${mix(plankWood, ol, 0.45)}"/><rect x="-64" y="-26" width="128" height="22" rx="6" fill="${plankWood}"/>` +
+        `<circle cx="-57.5" cy="-15" r="1.6" fill="${c('#8a6f66')}" stroke-width="1.2"/><circle cx="57.5" cy="-15" r="1.6" fill="${c('#8a6f66')}" stroke-width="1.2"/>` +
+        `<path transform="translate(${f(-nameW / 2)} -21.6)scale(1.1)" d="${letter(BOARD_NAME, 0, 0)}" ${pen(1.91)}/>` +
+        slots + lying + more + tuft(-half + 10, 0.7) + tuft(half - 40, 0.6) +
+        `</g>`,
+    );
+    // The field: an oval of thicker grass, a few bare patches, two rows of tall blades.
+    const r = rng(11);
+    const [x0, x1, y0, y1] = [300, 536, 916, 976];
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const tall = (x, y, k) => `<use href="#cv-g" transform="translate(${whole(x)} ${whole(y)})scale(${f2(k * (r() < 0.5 ? -1 : 1))} ${f2(k * 1.4)})"/>`;
+    const row = (n, from, to, y, k) => Array.from({ length: n }, (_, i) => tall(from + ((to - from) * i) / (n - 1) + r() * 8 - 4, y + r() * 5, k + r() * 0.15)).join('');
+    const blades = `stroke="${ol}" stroke-width="1.9"`;
+    const soil = [[-52, 12], [18, 16], [78, 8]].map(([dx, dy]) => `<ellipse cx="${cx + dx}" cy="${cy + dy}" rx="13" ry="4.5"/>`).join('');
+    // A heap of weeds already pulled, roots out, at the field's left end.
+    const heap =
+      `<g transform="translate(322 968)" stroke="${ol}" stroke-width="2"><use href="#cv-g" transform="translate(-4 0)rotate(72)scale(.9 1.2)"/><use href="#cv-g" transform="translate(4 -4)rotate(96)scale(.85 1.25)"/>` +
+      `<use href="#cv-g" transform="translate(0 -8)rotate(-80)scale(.85 1.1)"/><path d="M-6-1q-5 1-8-2m8 0q-4 4-9 4M2-10q5 0 8-3m-7 4q4 3 9 2" fill="none" stroke="${c('#b98a6a')}" stroke-width="1.8"/></g>`;
+    o.push(
+      `<ellipse cx="${cx}" cy="${cy}" rx="${(x1 - x0) / 2}" ry="${(y1 - y0) / 2}" fill="${c('#8fca8f')}"/><g fill="${c('#c9a888')}" opacity=".75">${soil}</g>` +
+        `<g ${blades}>${row(9, x0 + 22, x1 - 22, y0 + 20, 0.6)}${row(7, x0 + 34, x1 - 34, cy + 8, 0.7)}</g>${heap}`,
+    );
+    fieldFront = `<g ${blades}>${row(4, x0 + 50, x1 - 46, y1 - 3, 0.5)}</g>`;
+  }
+
   // ================= characters go here =================
   o.push(CAST);
+  if (fieldFront) {
+    o.push(fieldFront);
+  }
 
   // ================= foreground flower bed =================
   D.push(
