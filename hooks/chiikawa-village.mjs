@@ -10,7 +10,7 @@
 import { villageScene, bustIds, BUSTS, plankSvg, stampSvg } from "./scene.mjs";
 import { villageButton, VARIANTS } from "./button.mjs";
 import { play, frameDefs, castDefs } from "./play.mjs";
-import { addJob, noteTool, noteAnswered, settle, boardOf, boardKey, ENDED, RETURN_MS, GONE_MS } from "./agents.mjs";
+import { addJob, noteTool, noteAnswered, settle, boardOf, boardKey, nextMinuteAt, ENDED, RETURN_MS, GONE_MS } from "./agents.mjs";
 
 const NAME = "chiikawa-village";
 const ID = "village";
@@ -475,16 +475,17 @@ function bubbleLine(text) {
   return SPOKEN.test(fit) ? fit : "";
 }
 
-// The picture to send: the first that fits the app's limit, trying the whole play then
-// shorter look-aheads (never under the shortest of AHEADS, as a shorter one would blink
-// more often) before making it simpler, level by level: 1 the workers tug with one frame,
-// 2 they stand, 3 the notes go faceless. The scene alone if nothing else fits.
+// The picture to send: the first that fits the app's limit. Blinking is kept down before
+// the workers' look: at each look-ahead, from the whole play down to the shortest of
+// AHEADS, the workers tug with two frames (level 0), then with one (1); only past the
+// shortest do they stand (2) and the notes go faceless (3). The scene alone at worst.
 // `draw(ahead, level)` makes a picture: ahead null is the scene without the cast.
 export function pickPicture(draw, isCast) {
+  const aheads = [0, ...AHEADS];
   const tries = isCast
-    ? [0, 1, 2, 3].flatMap((level) => [0, ...AHEADS].map((ahead) => [ahead, level]))
+    ? [...aheads.flatMap((ahead) => [[ahead, 0], [ahead, 1]]), ...[2, 3].flatMap((level) => aheads.map((ahead) => [ahead, level]))]
     : [[null, 0], [null, 3]];
-  for (const [ahead, level] of [...tries, [null, 3]]) {
+  for (const [ahead, level] of tries) {
     const source = draw(ahead, level);
     if (source.length <= LIMIT) {
       return { source, ahead, level };
@@ -851,6 +852,12 @@ export function register(on) {
       const { source, ahead } = pickPicture(draw, isCast);
       lately = { key, at: now, source };
       redrawAt = ahead ? now + (ahead - SPARE) * 1000 : 0;
+      // The whole play in one picture would hold the notes' minutes still: a running
+      // note's next minute brings the next picture.
+      const turnsAt = isCast && !ahead ? nextMinuteAt(jobs, now) : null;
+      if (turnsAt !== null) {
+        redrawAt = turnsAt;
+      }
       // A friend whose job ended meets the loop again RETURN_MS on: a picture then.
       for (const w of jobBoard.workers) {
         const home = (w.state === "done" || w.state === "fail") && w.since + RETURN_MS;

@@ -7,11 +7,12 @@
 export const WORK_ORDER = ["chiikawa", "hachiware", "usagi", "kurimanju", "momonga", "rakko"];
 export const MAX_WORKERS = 3; // the field holds three
 export const MAX_NOTES = 4; // pins on the board
-// A finished note hangs stamped for a while, lies on the grass for a while, then goes.
-export const DROP_MS = 60000;
-export const GONE_MS = 120000;
 // How long a friend stays out after its job ends: the line said, the walk back home.
 export const RETURN_MS = 40000;
+// A finished note hangs stamped until its friend is home (one picture carries both),
+// lies on the grass a while, then goes.
+export const DROP_MS = RETURN_MS;
+export const GONE_MS = 120000;
 
 export const ENDED = new Set(["completed", "failed", "killed"]);
 const WAITING = new Set(["waiting", "idle"]);
@@ -120,6 +121,17 @@ export function boardOf(jobs, now) {
     extra: Math.max(0, pinned.length - MAX_NOTES),
     workers,
   };
+}
+
+// When the next running note's minute count turns over, or null if none counts.
+export function nextMinuteAt(jobs, now) {
+  let next = null;
+  for (const job of jobs) {
+    if (job.endedAt !== null || job.startedAt === null) continue;
+    const at = job.startedAt + (Math.floor((now - job.startedAt) / 60000) + 1) * 60000;
+    if (next === null || at < next) next = at;
+  }
+  return next;
 }
 
 // What a new picture depends on: who, which mark, fallen or not, and the field.

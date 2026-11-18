@@ -28,6 +28,18 @@ test("done says the line, then walks back to meet the loop", () => {
   assert.match(svg, new RegExp(`${back.x} ${back.y}`));
 });
 
+test("a friend out in the field still says its line", () => {
+  // Hachiware speaks by default; a line said to it must show over it in the field.
+  const svg = play(10, "어디가 문제일까?", 12, 62, null, { workers: [W({ who: "hachiware" })] });
+  assert.match(svg, /어디가 문제일까\?/);
+});
+
+test("the done line comes before any other line", () => {
+  const svg = play(200, "어디가 문제일까?", 12, 62, null, { workers: [W({ who: "hachiware", state: "done", since: 200 })] });
+  assert.match(svg, new RegExp(DONE_LINE));
+  assert.doesNotMatch(svg, /어디가 문제일까\?/);
+});
+
 test("a failed job sends the friend home without a word", () => {
   const svg = play(200, "", 12, 62, null, { workers: [W({ state: "fail", since: 200 })] });
   assert.doesNotMatch(svg, new RegExp(DONE_LINE));

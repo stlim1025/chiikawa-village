@@ -95,6 +95,27 @@ test("an empty board, as today", () => {
   }
 });
 
+test("while agents work, pictures last nearly as long as on a quiet day", () => {
+  // Blinking is kept down before the workers' look: the tug goes to one frame before the
+  // look-ahead shortens.
+  const notes = FULL.notes.slice(0, 2);
+  const today = [];
+  const working = [];
+  for (const hour of HOURS)
+    for (const weather of WEATHERS)
+      for (const t0 of TIMES) {
+        const t = 1000 + t0;
+        today.push(pickPicture(drawFor({ hour, weather, t, jobs: null, said: [] }), true).ahead);
+        const two = workersAt(t).slice(0, 2).map((w) => ({ ...w, state: "work" }));
+        working.push(pickPicture(drawFor({ hour, weather, t, jobs: { notes, extra: 0 }, workers: two, said: [] }), true).ahead);
+      }
+  const before = mean(today.map(lasts));
+  // While a note counts minutes, the whole play in one picture lasts to the next minute.
+  const after = mean(working.map((ahead) => (ahead === 0 ? 60 : lasts(ahead))));
+  console.log(`two agents: a picture lasts ${before.toFixed(1)} s -> ${after.toFixed(1)} s on average`);
+  assert.ok(after >= before * 0.85, `pictures last ${((1 - after / before) * 100).toFixed(0)}% shorter while two agents work`);
+});
+
 test("with the cast off, a picture with faces fits", () => {
   const pick = pickPicture(drawFor({ hour: 22, weather: "swirl", t: 1000, jobs: FULL }), false);
   assert.equal(pick.ahead, null);

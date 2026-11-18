@@ -13,6 +13,7 @@ import {
   settle,
   boardOf,
   boardKey,
+  nextMinuteAt,
 } from "../hooks/agents.mjs";
 
 const job = (id, o = {}) => ({ id, type: "x", task: "t", startedAt: 0, status: "running", now: 0, ...o });
@@ -91,6 +92,26 @@ test("tools are noted on running jobs only, the last 24 kept", () => {
   const ended = settle(jobs, [{ id: "a", status: "completed" }], 10).jobs;
   assert.equal(noteTool(ended, "a", "Bash", "ls")[0].tool, "Read");
   assert.deepEqual(noteTool(jobs, "nobody", "Bash", "ls"), jobs);
+});
+
+test("the note falls as its friend gets home, so one picture carries both", () => {
+  let jobs = addJob([], job("a"), WORK_ORDER);
+  jobs = settle(jobs, [{ id: "a", status: "completed" }], 1000).jobs;
+  const before = boardOf(jobs, 1000 + RETURN_MS - 1);
+  assert.equal(before.workers.length, 1);
+  assert.equal(before.notes[0].isFallen, false);
+  const home = boardOf(jobs, 1000 + RETURN_MS);
+  assert.equal(home.workers.length, 0);
+  assert.equal(home.notes[0].isFallen, true);
+});
+
+test("the next minute a running note's count turns over", () => {
+  // Started at 10 s and at 50 s past: the second one turns first, at 1:50.
+  let jobs = addJob([], job("a", { startedAt: 10000, now: 10000 }), WORK_ORDER);
+  jobs = addJob(jobs, job("b", { startedAt: 50000, now: 50000 }), WORK_ORDER);
+  assert.equal(nextMinuteAt(jobs, 100000), 110000);
+  assert.equal(nextMinuteAt(settle(jobs, [{ id: "a", status: "completed" }, { id: "b", status: "completed" }], 1).jobs, 100000), null);
+  assert.equal(nextMinuteAt(addJob([], job("s", { startedAt: null }), WORK_ORDER), 100000), null);
 });
 
 test("a job already on the board is not added again", () => {

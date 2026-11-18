@@ -328,7 +328,9 @@ export function play(startAt, said = "", hour = 12, ahead = 0, only = null, { wo
   const out = workers.filter((w) => onStage.some((one) => one.who === w.who));
   const plan = onStage.filter((one) => !out.some((w) => w.who === one.who));
   const n = nightness(hour);
-  const parts = [...plan.map((one) => actor(one, startAt, said, window)), ...out.map((w) => worker(w, startAt, plain, n))];
+  // A worker says its lines out in the field as it would at play.
+  const speaking = (who) => lineOf(said, who, PLAN.find((one) => one.who === who)?.speaks);
+  const parts = [...plan.map((one) => actor(one, startAt, said, window)), ...out.map((w) => worker(w, startAt, plain, n, speaking(w.who)))];
   const cast = parts.map((p) => p.body).join("");
   const keep = new Set(window ? usedFrames(window[0], window[1], plan) : usedFrames(0, LOOP, plan));
   for (const w of out) for (const id of workerFrames(w, plain)) keep.add(id);
@@ -438,7 +440,7 @@ const BLADES =
 
 // A worker drawn on its way: one go of each move, from the times on its way, held at
 // the end; the picture's own clock starts at `startAt`.
-function worker(w, startAt, plain, n) {
+function worker(w, startAt, plain, n, saying = "") {
   const way = wayOf(w, plain);
   const { points, acts, line } = way;
   const first = points[0].t;
@@ -485,7 +487,8 @@ function worker(w, startAt, plain, n) {
     })
     .join("");
   const body = `<g${move}>${moving}<g transform="scale(${sizeOf(here)})">${sizing}<g transform="scale(${now.face} 1)">${turning}${groups}</g></g></g>`;
-  // The line, said where it stood up, for as long as BUBBLE_S.
+  // The done line, said where it stood up, for as long as BUBBLE_S; else what it says
+  // anyway, over its head wherever it goes.
   let words = "";
   if (line && startAt < line.until) {
     const on = startAt >= line.from;
@@ -493,6 +496,8 @@ function worker(w, startAt, plain, n) {
       `<g transform="translate(${f2(line.at.x)} ${f2(line.at.y)})" opacity="${on ? 1 : 0}">` +
       (on ? "" : `<set attributeName="opacity" to="1" begin="${f2(line.from - startAt)}s" fill="freeze"/>`) +
       `<set attributeName="opacity" to="0" begin="${f2(line.until - startAt)}s" fill="freeze"/>${bubble(DONE_LINE, -BASE * 1.02)}</g>`;
+  } else if (saying) {
+    words = `<g${move}>${moving}${bubble(saying, -BASE * 1.02)}</g>`;
   }
   return { body, words };
 }
