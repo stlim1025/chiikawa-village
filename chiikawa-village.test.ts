@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 // The job board as the hooks module runs it: agents tracked as jobs, the label under
-// the prompt, the pane opened only by it, the backdrop redrawn on a start or an end.
+// the prompt, the notes it unfolds above the prompt (no side pane, so the conversation
+// is never pushed aside), the backdrop redrawn on a start or an end.
 
 const SESSION = { cwd: '/', surface: 'desktop', isInteractive: true } as const
 const SPAWN = {
@@ -15,11 +16,10 @@ const SPAWN = {
   fork: false,
 } as const
 const MODE = { plugin: 'chiikawa-village', component: 'SessionMode', props: { modes: [] } } as const
-const PANE = {
+const BAND = {
   plugin: 'chiikawa-village',
-  component: 'Pane',
-  requestId: 'village-jobs',
-  props: { title: '일거리', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  component: 'AbovePrompt',
+  props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 const BACKDROP = {
   plugin: 'chiikawa-village',
@@ -89,21 +89,29 @@ test('no jobs, no label', async ($, on) => {
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`the label counts jobs and opens the pane (${surface})`, async ($, on) => {
+  test(`the label comes first, counts jobs and unfolds the notes above the prompt (${surface})`, async ($, on) => {
     mock.clock(on, { now: 1_000_000 })
     const seen = engine(on, () => [{ id: 'a1', status: 'running', type: 'Explore', description: '찾기' }])
 
     await $.session.start({ ...SESSION, surface })
     await $.agent.spawn(SPAWN)
     const ui = await $.ui.mount({ ...MODE, surface })
+    const band = await $.ui.mount({ ...BAND, surface })
 
-    expect(await label(ui)).toBe('일거리 1 ▸ 펼치기')
+    // First in the footer row: what comes after the first button is cut short there.
+    expect((await ui.findAll({ type: 'Button' }))[0]?.key).toBe('open-village-jobs')
+    expect(await label(ui)).toBe('📌 1')
+    expect(await band.find({ type: 'Text', text: '치이카와가 맡았어요' })).toBeUndefined()
+
     await ui.press({ key: 'open-village-jobs' })
-    expect(seen.opened).toHaveLength(1)
-    expect(seen.opened[0]).toMatchObject({ id: 'village-jobs', title: '일거리' })
-    expect(await label(ui)).toBe('일거리 1 ▸ 접기')
+    expect(await label(ui)).toBe('📌 1 ▾')
+    expect(await band.find({ type: 'Text', text: '치이카와가 맡았어요' })).toBeDefined()
+    // No side pane: nothing is docked beside the conversation.
+    expect(seen.opened).toHaveLength(0)
+
     await ui.press({ key: 'open-village-jobs' })
-    expect(seen.closed[0]).toMatchObject({ id: 'village-jobs' })
+    expect(await band.find({ type: 'Text', text: '치이카와가 맡았어요' })).toBeUndefined()
+    await band.unmount()
     await ui.unmount()
   })
 
@@ -114,20 +122,25 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.session.start({ ...SESSION, surface })
     await $.agent.spawn(SPAWN)
     const ui = await $.ui.mount({ ...MODE, surface })
-    const words = await ui.find({ type: 'Text', text: '일거리 1 ▸ 펼치기' })
+    const words = await ui.find({ type: 'Text', text: '📌 1' })
 
     expect(words).toBeDefined()
     expect(words?.props.color).toBeDefined()
     await ui.unmount()
   })
 
-  test(`the pane draws a note per job (${surface})`, async ($, on) => {
+  test(`the unfolded notes show each job, and give way to a survey (${surface})`, async ($, on) => {
     mock.clock(on, { now: 1_000_000 })
     engine(on, () => [{ id: 'a1', status: 'running', type: 'Explore', description: '찾기' }])
 
     await $.session.start({ ...SESSION, surface })
     await $.agent.spawn(SPAWN)
-    const ui = await $.ui.mount({ ...PANE, surface })
+    const mode = await $.ui.mount({ ...MODE, surface })
+    await mode.press({ key: 'open-village-jobs' })
+    const survey = await $.ui.mount({ ...BAND, surface, props: { ...BAND.props, hasSurvey: true } })
+    expect(await survey.find({ type: 'Text', text: '치이카와가 맡았어요' })).toBeUndefined()
+    await survey.unmount()
+    const ui = await $.ui.mount({ ...BAND, surface })
 
     expect(await ui.find({ type: 'Text', text: '치이카와가 맡았어요' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '찾기' })).toBeDefined()
@@ -202,6 +215,6 @@ test('cast off keeps face defs', async ($, on) => {
 
   await $.command.run({ command: 'village', args: 'off' })
   const mode = await $.ui.mount({ ...MODE, surface: 'desktop' })
-  expect(await label(mode)).toBe('일거리 1 ▸ 펼치기')
+  expect(await label(mode)).toBe('📌 1')
   await mode.unmount()
 })

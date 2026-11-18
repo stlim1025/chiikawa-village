@@ -53,12 +53,11 @@ let onStage = EVERYONE;
 
 // ── the job board: the session's subagents as jobs (folded in from agent-watch) ──
 // Each job pins a note on the board on the lawn and sends a friend to the weeding
-// field (agents.mjs keeps the books). The pane with the details opens only from the
+// field (agents.mjs keeps the books). The details unfold above the prompt only from the
 // label under the prompt, so the conversation is never pushed aside.
-const PANE = "village-jobs";
-const PANE_TITLE = "일거리";
-// A pane open redraws on a tool or a status change, never more often than this.
-const PANE_MIN_MS = 2000;
+// The notes unfolded above the prompt redraw on a tool or a status change, never more
+// often than this.
+const NOTES_MIN_MS = 2000;
 const NAMES = Object.fromEntries(Object.entries(CAST_NAMES).map(([name, who]) => [who, name]));
 // A status without a color draws dim (agent-watch's).
 const STATUS = {
@@ -70,7 +69,7 @@ const STATUS = {
   failed: { mark: "✗", word: "실패", color: "red" },
   killed: { mark: "■", word: "중단" },
 };
-// Tool kinds for the strip of squares on a note in the pane (agent-watch's).
+// Tool kinds for the strip of squares on an unfolded note (agent-watch's).
 const KINDS = [
   { color: "blue", tools: ["Read", "Glob", "Grep", "LS", "NotebookRead", "LSP"] },
   { color: "yellow", tools: ["Edit", "Write", "MultiEdit", "NotebookEdit"] },
@@ -80,9 +79,9 @@ const KINDS = [
 ];
 const INK = "#5b4038";
 let jobs = [];
-let isPaneOpen = false;
-let paneDrawnAt = 0;
-let isPaneStale = false;
+let areNotesOpen = false;
+let notesDrawnAt = 0;
+let areNotesStale = false;
 let jobsSeen = ""; // what the board and label showed when last asked to redraw
 
 // The tool call's most telling argument: a command, a file, a pattern.
@@ -113,7 +112,7 @@ const working = () => jobs.filter((job) => job.endedAt === null).length;
 function jobsView(now) {
   const board = boardOf(jobs, now);
   const extra = isCast ? "" : board.notes.map((n) => `${n.minutes}${n.isFallen ? "f" : ""}`).join(",");
-  return `${board.notes.filter((n) => !n.isFallen).map((n) => `${n.who}.${n.mark}`).join(",")}|${board.extra}|${working()}|${isPaneOpen}|${extra}`;
+  return `${board.notes.filter((n) => !n.isFallen).map((n) => `${n.who}.${n.mark}`).join(",")}|${board.extra}|${working()}|${areNotesOpen}|${extra}`;
 }
 
 async function seedJobs($) {
@@ -149,16 +148,20 @@ async function trackJobs($, now) {
     const ms = ranFor(job, now);
     $.ui.toast(`${s.mark} ${s.word} · ${job.type} '${job.task}' · ${ms === null ? "시간 모름" : elapsed(ms)}`, { timeoutMs: 6000 });
   }
-  const view = jobsView(now);
-  // An open pane shows minutes run: a new minute makes it stale.
-  if (isPaneOpen && Math.floor(now / 60000) !== Math.floor(paneDrawnAt / 60000)) {
-    isPaneStale = true;
+  // No one working: the label goes, and the notes fold with it.
+  if (!working()) {
+    areNotesOpen = false;
   }
-  const paneDue = isPaneOpen && isPaneStale && now - paneDrawnAt >= PANE_MIN_MS;
-  if (view !== jobsSeen || paneDue) {
+  const view = jobsView(now);
+  // Unfolded notes show minutes run: a new minute makes them stale.
+  if (areNotesOpen && Math.floor(now / 60000) !== Math.floor(notesDrawnAt / 60000)) {
+    areNotesStale = true;
+  }
+  const notesDue = areNotesOpen && areNotesStale && now - notesDrawnAt >= NOTES_MIN_MS;
+  if (view !== jobsSeen || notesDue) {
     jobsSeen = view;
-    isPaneStale = false;
-    paneDrawnAt = now;
+    areNotesStale = false;
+    notesDrawnAt = now;
     $.ui.invalidate("ui.render");
   }
 }
@@ -529,7 +532,7 @@ export function register(on) {
     return result;
   });
 
-  // A new agent pins a note and sends a friend to the field; no pane opens.
+  // A new agent pins a note and sends a friend to the field; nothing opens.
   on("agent.spawn", async ($, e, next) => {
     const result = await next(e);
     if (result?.agentId) {
@@ -541,18 +544,18 @@ export function register(on) {
     return result;
   });
 
-  // Each tool an agent's loop calls, for the pane; it redraws only while open.
+  // Each tool an agent's loop calls, for the unfolded notes; redrawn only while unfolded.
   on("tool.call", async ($, e, next) => {
     if (e.agentId && jobs.some((job) => job.id === e.agentId && job.endedAt === null)) {
       jobs = noteTool(jobs, e.agentId, e.tool, describeTool(e));
-      if (isPaneOpen) {
+      if (areNotesOpen) {
         const now = await $.clock.now();
-        if (now - paneDrawnAt >= PANE_MIN_MS) {
-          paneDrawnAt = now;
-          isPaneStale = false;
+        if (now - notesDrawnAt >= NOTES_MIN_MS) {
+          notesDrawnAt = now;
+          areNotesStale = false;
           $.ui.invalidate("ui.render");
         } else {
-          isPaneStale = true;
+          areNotesStale = true;
         }
       }
     }
@@ -696,7 +699,9 @@ export function register(on) {
 
   // A button after the engine's mode label (and any other mod's there): each press
   // steps the village to the next part of the day, `자동` following the clock.
-  // After it, while agents work, the job label: it opens and closes the job pane.
+  // Before it, while agents work, the job label: it unfolds and folds the notes above
+  // the prompt. It comes first and short, as the desktop's footer row is narrow and
+  // cuts what comes after the first button down to an ellipsis.
   on("ui.render", { component: "SessionMode" }, async ($, e, next) => {
     const theirs = await next(e);
     const count = working();
@@ -705,6 +710,18 @@ export function register(on) {
     }
     const { Box, Text, Button } = $.ui.resolve(e);
     const children = theirs ? [theirs] : [];
+    if (count) {
+      const onPress = async () => {
+        areNotesOpen = !areNotesOpen;
+        notesDrawnAt = await $.clock.now();
+        $.ui.invalidate("ui.render");
+      };
+      // Its words in a Text of their own colour, as the day button's are.
+      const words = `📌 ${count}${areNotesOpen ? " ▾" : ""}`;
+      children.push(
+        Button({ key: "open-village-jobs", label: words, plain: true, onPress, children: Text({ color: "#f6e6c8", children: words }) }),
+      );
+    }
     if (isOn) {
       const onPress = () => {
         const at = CYCLE.indexOf(part);
@@ -714,53 +731,23 @@ export function register(on) {
       const hour = hourShown ?? new Date(await $.clock.now()).getHours();
       children.push(villageButton({ Box, Text, Button, part, hour, onPress, variant: look }));
     }
-    if (count) {
-      const onPress = async () => {
-        if (isPaneOpen) {
-          isPaneOpen = false;
-          try {
-            await $.ui.close({ id: PANE });
-          } catch {
-            // A hook kept it open.
-          }
-        } else {
-          try {
-            isPaneOpen = (await $.ui.open({ id: PANE, title: PANE_TITLE })).isPlaced;
-            paneDrawnAt = await $.clock.now();
-          } catch {
-            // A ui.open hook refused the pane.
-          }
-        }
-        $.ui.invalidate("ui.render");
-      };
-      // Drawn as the day button is, its words in a Text of their own colour: a bare
-      // label drew no visible words in the desktop's footer.
-      const words = `일거리 ${count} ▸ ${isPaneOpen ? "접기" : "펼치기"}`;
-      children.push(
-        Button({ key: "open-village-jobs", label: words, plain: true, onPress, children: Text({ color: "#f6e6c8", children: words }) }),
-      );
-    }
     return Box({ flexDirection: "row", columnGap: 1, children });
   });
 
-  on("ui.close", { id: PANE }, async ($, e, next) => {
-    const result = await next(e);
-    isPaneOpen = false;
-    $.ui.invalidate("ui.render");
-    return result;
-  });
-
-  // The job pane: a note for each job, as on the board, with what the board can't show.
-  on("ui.render", { component: "Pane", requestId: PANE }, async ($, e) => {
+  // The notes unfolded above the prompt: a note for each job, as on the board, with
+  // what the board can't show. Above the prompt, not in a pane at the side, so the
+  // conversation is never pushed aside; a survey there has the band to itself.
+  on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
+    // Folded, a survey up, or no one working (the label is gone then): the band as it was.
+    if (!areNotesOpen || e.props.hasSurvey || !working()) {
+      return next(e);
+    }
     const { Box, Text, Svg } = $.ui.resolve(e);
     const now = await $.clock.now();
     const shown = jobs.filter((job) => job.endedAt === null || now < job.endedAt + GONE_MS);
     const head = Svg
       ? Svg({ source: plankSvg(), alt: "일거리 게시판", height: 30 })
       : Text({ bold: true, color: INK, children: "일거리 게시판" });
-    if (!shown.length) {
-      return Box({ flexDirection: "column", rowGap: 1, children: [head, Text({ dimColor: true, children: "지금 일거리가 없습니다." })] });
-    }
     const card = (job) => {
       const s = STATUS[job.status] ?? STATUS.running;
       const ms = ranFor(job, now);
