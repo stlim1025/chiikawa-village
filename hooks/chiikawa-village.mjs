@@ -733,7 +733,12 @@ export function register(on) {
         }
         $.ui.invalidate("ui.render");
       };
-      children.push(Button({ key: "open-village-jobs", label: `일거리 ${count} ▸ ${isPaneOpen ? "접기" : "펼치기"}`, plain: true, onPress }));
+      // Drawn as the day button is, its words in a Text of their own colour: a bare
+      // label drew no visible words in the desktop's footer.
+      const words = `일거리 ${count} ▸ ${isPaneOpen ? "접기" : "펼치기"}`;
+      children.push(
+        Button({ key: "open-village-jobs", label: words, plain: true, onPress, children: Text({ color: "#f6e6c8", children: words }) }),
+      );
     }
     return Box({ flexDirection: "row", columnGap: 1, children });
   });

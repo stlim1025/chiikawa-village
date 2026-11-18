@@ -107,6 +107,20 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.unmount()
   })
 
+  test(`the label's words are drawn in a colour of their own, as the day button's are (${surface})`, async ($, on) => {
+    mock.clock(on, { now: 1_000_000 })
+    engine(on, () => [{ id: 'a1', status: 'running', type: 'Explore', description: '찾기' }])
+
+    await $.session.start({ ...SESSION, surface })
+    await $.agent.spawn(SPAWN)
+    const ui = await $.ui.mount({ ...MODE, surface })
+    const words = await ui.find({ type: 'Text', text: '일거리 1 ▸ 펼치기' })
+
+    expect(words).toBeDefined()
+    expect(words?.props.color).toBeDefined()
+    await ui.unmount()
+  })
+
   test(`the pane draws a note per job (${surface})`, async ($, on) => {
     mock.clock(on, { now: 1_000_000 })
     engine(on, () => [{ id: 'a1', status: 'running', type: 'Explore', description: '찾기' }])
